@@ -1,0 +1,993 @@
+---
+title: "Identifying Genes Under Peaks"
+author: "Patricka Williams-Simon"
+date: "10/24/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(DSPRqtlDataA)
+library(DSPRqtl)
+library(tidyverse)
+library(DESeq2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For each peak:
+ - identify haplotype means
+ - identify eQTL under peaks
+ - identify eQTL that show means like haploype means
+ - identify eQTL that mirror effect of DEgenes
+ - idenitfy DE groups by haplotype
+
+# Get expression data and check for highly correlated genes
+
+```{r}
+
+load(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/Final_EXPR_MAT.rda")
+
+load(file="../../LearnMemTolPheno/ProcessedData/L_MDATA.rda")
+ww<- which(L_MDATA$patRIL %in% rownames(qn.mat))
+wwe<- which(rownames(qn.mat) %in% L_MDATA$patRIL)
+
+L.sub <- L_MDATA[ww,]
+qn.mat <- qn.mat[wwe,]
+
+all.equal(as.numeric(row.names(qn.mat)), L.sub$patRIL)
+
+ccs.l <- cor(L.sub$Learning_Mean, qn.mat)
+ccs.m <- cor(L.sub$Memory_Mean, qn.mat)
+
+cors.lm <- data.frame('ID' = colnames(qn.mat), 'rLearn' = as.numeric(ccs.l), 'rMem' = as.numeric(ccs.m), stringsAsFactors=FALSE)
+
+
+cgn<-read.table(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/fbgn_fbtr_fbpp_fb_2012_02.tsv",header=FALSE,stringsAsFactors=FALSE,sep="\t",fill=TRUE)
+load(file='/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/probes/CDS/completeCDS.rda')
+ss<-merge(cgn,bl, by.x="V2",by.y="FBtr")
+ww.t <- which(ss$CGid %in% colnames(qn.mat))
+ww.g <- which(ss$CGgn %in% colnames(qn.mat))
+decode.n <- ss[,c('V1','CGid','CGgn')]
+decode.n$ID <- NA
+decode.n$ID[ww.t]<- ss$CGid[ww.t]
+decode.n$ID[ww.g]<- ss$CGgn[ww.g]
+decode.n <- decode.n[,c('V1','ID')]
+decode.n <- unique(decode.n, MARGIN=1)
+colnames(decode.n) <- c("FBgn","ID")
+
+cors.lm <- merge(cors.lm, decode.n,by='ID',sort=FALSE, all.x=TRUE)
+
+cors.nas <- cors.lm[is.na(cors.lm$FBgn),]
+cors.lm <- cors.lm[is.na(cors.lm$FBgn)==FALSE,]
+
+
+cors.nas[which.max(abs(cors.nas$rLearn)),]
+cors.nas[which.max(abs(cors.nas$rMem)),]
+cors.nas[which(abs(cors.nas$rLearn) >0.1),]
+
+```
+
+#look at haps of pools - add to list
+
+```{r}
+load(file ="../ProcessedData/Peaks_wCIs.rda")
+
+rrs <- read.table(file="../../LearnMemTolRnaseq/DEseq_LearnMemTol/Data/RILs_in_pools.txt", sep="\t", stringsAsFactors = FALSE, header=TRUE)
+
+rrcode <- c('LH','LL',
+  'MH','ML',
+  'TH','TL')
+
+cc <- 1
+
+for(kk in 1:3)
+{
+
+list.peak <- ci.peak[[kk]]
+list.peak[,43:58]<-NA
+colnames(list.peak)[43:58] <- c("L1","L2","L3","L4","L5","L6","L7","L8",
+                              "H1","H2","H3","H4","H5","H6","H7","H8")
+for(jj in 1:nrow(list.peak))
+{
+  ppeak <- list.peak[jj,]
+  
+  objname<-paste("A_",ppeak$chr,"_",ppeak$Ppos,sep="")
+  data(list=objname)
+  geno <- get(objname)
+  geno <- geno[,c("ril", "AA1","AA2","AA3","AA4","AA5","AA6","AA7","AA8")]
+  lowset <- geno %>% filter(ril %in% rrs[rrs$Pool==rrcode[(cc+1)],'patRIL'])
+  highset <- geno %>% filter(ril %in% rrs[rrs$Pool==rrcode[cc],'patRIL'])
+  ppeak[,43:50]<-round(colSums(lowset[,2:9]))
+  ppeak[,51:58]<-round(colSums(highset[,2:9]))
+  list.peak[jj,]<-ppeak
+}
+cc<-cc+1
+ci.peak[[kk]]<-list.peak
+}
+
+save(ci.peak, file ="../ProcessedData/Peaks_wCIs.rda")
+
+
+```
+
+# Get list of genes under peaks
+
+```{r}
+load(file = "../../LearnMemTolRnaseq/DEseq_LearnMemTol/Data/LearnresSVOrder.Rda")
+str(LearnresSVorder)
+LearnresSVorder$FBgn <- rownames(LearnresSVorder)
+Learn_sig_genes <- as.data.frame(LearnresSVorder)
+
+load(file = "../../LearnMemTolRnaseq/DEseq_LearnMemTol/Data/MemresSVOrder.Rda")
+str(MemresSVorder)
+MemresSVorder$FBgn <- rownames(MemresSVorder)
+colnames(MemresSVorder)
+
+Mem_sig_genes <- as.data.frame(MemresSVorder)
+
+gene_map_table <- read_lines(file = "../ProcessedData/gene_map_table_fb_2018_04.tsv",
+                skip = 6) %>% 
+  str_split(pattern = "\t", simplify = TRUE) %>% 
+  as_tibble() %>% 
+  filter(V1 == "Dmel")
+
+colnames(gene_map_table) <- c('spp','gname','FBgn','v3','cyt','pos')
+
+
+
+gene_map_table$chr <- str_split(gene_map_table$pos, ":",simplify=TRUE)[,1]
+temp.s1 <- str_split(gene_map_table$pos, ":",simplify=TRUE)[,2] %>% 
+  str_split(fixed(".."),simplify=TRUE)
+gene_map_table$startp <- as.numeric(temp.s1[,1])
+
+gene_map_table$stopp <- as.numeric(str_split(temp.s1[,2],fixed("("),simplify = TRUE)[,1])
+
+Learn_gene_list_merged <- merge(Learn_sig_genes, gene_map_table, by="FBgn")
+Mem_gene_list_merged <- merge(Mem_sig_genes, gene_map_table, by="FBgn")
+
+Learn_gene_list_sub <- Learn_gene_list_merged[c(1,3,6,7,9,13:15)]
+colnames(Learn_gene_list_sub)
+
+Mem_gene_list_sub <- Mem_gene_list_merged[c(1,3,6,7,9,13:15)]
+colnames(Mem_gene_list_sub)
+
+#Learning
+foc.peak <- ci.peak[[1]][1,]
+
+learn.list <-vector(mode='list', length=nrow(ci.peak$LearnPowerTrans))
+
+Learn_totdf<-data.frame(NULL)
+
+for(rowN in 1:nrow(ci.peak$LearnPowerTrans)) 
+  
+  {
+  
+  foc.peak<-ci.peak[['LearnPowerTrans']][rowN,]
+  lw <- (which(Learn_gene_list_sub$chr==foc.peak$chr & 
+                 ((Learn_gene_list_sub$startp <= foc.peak$upR6 & Learn_gene_list_sub$stopp >= foc.peak$lpR6))))  
+  
+  Learn_genes_under_peak<-Learn_gene_list_sub[lw,]
+  learn.list[[rowN]] <-Learn_genes_under_peak
+  
+ }
+
+
+#Memory 
+
+Mem_foc_peak <- ci.peak[["Memory_Mean"]][1,]
+
+Mem.list <-vector(mode='list', length=nrow(ci.peak$Memory_Mean))
+
+Mem_totdf<-data.frame(NULL)
+for(rowN in 1:nrow(ci.peak$Memory_Mean)) 
+  
+  {
+  
+  foc.peak<-ci.peak[['Memory_Mean']][rowN,]
+  mw <- (which(Mem_gene_list_sub$chr==foc.peak$chr & 
+                 ((Mem_gene_list_sub$startp <= foc.peak$upR6 & Mem_gene_list_sub$stopp >= foc.peak$lpR6))))  
+  
+ 
+  Mem_genes_under_peak <- Mem_gene_list_sub[mw,]
+  
+  Mem.list[[rowN]] <-Mem_genes_under_peak
+  
+}
+
+```
+
+
+
+# For each peak, get means and compare to eQTL means. Also compare to genes in intervals from cohort expression expt.
+
+```{r}
+data("positionlist_wgenetic")
+
+#files from old proj
+load(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/goodpeaksinfo_matrix.rda")
+load(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/means_wcorrected.rda")
+
+effects <- effects[pinfo$cis==TRUE,]
+
+pinfo <- pinfo[pinfo$cis==TRUE,]
+
+effects <- merge(effects, decode.n, by='ID',sort=FALSE, all.x=TRUE)
+
+for(jj in 1:length(learn.list))
+{
+
+ll.foc <- learn.list[[jj]]
+pp.foc <- ci.peak[[1]][jj,]
+
+mw <- (which(pinfo$chr==pp.foc$chr & 
+                 ((pinfo$peaklpB <= pp.foc$up & pinfo$peakupB >= pp.foc$lp))))  
+  
+ee <- effects[effects$ID %in% pinfo$ID[mw],]
+
+f.high <- which(apply(rbind(as.numeric(pp.foc[,35:42]), as.matrix(ee[,34:41])),2, min) > 4)
+
+qtl.e <- pp.foc[,19:26]
+eqtl.e <- ee[,2:9]
+
+qtl.e <- qtl.e[,f.high]
+eqtl.e <- eqtl.e[,f.high]
+
+cors.effs <- data.frame('FBgn'= ee$FBgn, 'corEff'= apply(eqtl.e, 1, function(x) cor(x,as.numeric(qtl.e))), stringsAsFactors = FALSE)
+
+ll.all <- merge(ll.foc, cors.effs, by='FBgn', all=TRUE)
+
+ll.all <- merge(ll.all, cors.lm, by='FBgn', all.x=TRUE)
+learn.list[[jj]] <- ll.all
+}
+
+save(learn.list,file="../ProcessedData/Learn_genes_under_peak.rda")
+
+for(jj in 1:length(Mem.list))
+{
+
+ll.foc <- Mem.list[[jj]]
+pp.foc <- ci.peak[[2]][jj,]
+
+mw <- (which(pinfo$chr==pp.foc$chr & 
+                 ((pinfo$peaklpB <= pp.foc$up & pinfo$peakupB >= pp.foc$lp))))  
+  
+ee <- effects[effects$ID %in% pinfo$ID[mw],]
+
+f.high <- which(apply(rbind(as.numeric(pp.foc[,35:42]), as.matrix(ee[,34:41])),2, min) > 4)
+
+qtl.e <- pp.foc[,19:26]
+eqtl.e <- ee[,2:9]
+
+qtl.e <- qtl.e[,f.high]
+eqtl.e <- eqtl.e[,f.high]
+
+cors.effs <- data.frame('FBgn'= ee$FBgn, 'corEff'= apply(eqtl.e, 1, function(x) cor(x,as.numeric(qtl.e))), stringsAsFactors = FALSE)
+
+ll.all <- merge(ll.foc, cors.effs, by='FBgn', all=TRUE)
+
+ll.all <- merge(ll.all, cors.lm, by='FBgn', all.x=TRUE)
+Mem.list[[jj]] <- ll.all
+}
+
+save(Mem.list,file="../ProcessedData/Mem_genes_under_peak.rda")
+
+```
+
+
+## Shared peaks
+
+### Q4
+
+```{r}
+#Q4
+
+mm <- 1 
+ll <- 1
+cc.ll <- ci.peak[[1]][ll,]
+cc.mm <- ci.peak[[2]][mm,]
+
+ll.sub <- learn.list[[ll]]
+mm.sub <- Mem.list[[mm]]
+
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+mm.sub[which.max(abs(mm.sub$rMem)),]
+
+ll.sub[which.max(abs(ll.sub$corEff)),]
+mm.sub[which.max(abs(mm.sub$corEff)),]
+
+```
+
+Mad is in both CIs and trends in same direction for learning and memory. Also evidence from FlyBase.
+
+Learning FC: `r subset(ll.sub, gname=="Mad")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="Mad")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="Mad")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="Mad")$padj[1]`
+
+In the eQTL dataset, expression of Mad is most highly correlated with learning in our dataset (memory correlation is lower). 
+
+Learning corr: `r max(abs(subset(ll.sub, gname=="Mad")$rLearn))`
+Memory corr: `r max(abs(subset(mm.sub, gname=="Mad")$rMem))`
+
+Hydr2 is also in both CIs and trends in same direction for learning and memory. 
+
+Learning FC: `r subset(ll.sub, gname=="Hydr2")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="Hydr2")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="Hydr2")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="Hydr2")$padj[1]`
+
+Hydr2 expression is less correlated than Mad
+
+Learning corr: `r max(abs(subset(ll.sub, gname=="Hydr2")$rLearn))`
+Memory corr: `r max(abs(subset(mm.sub, gname=="Hydr2")$rMem))`
+
+Both Mad and Hydr2 have moderate correlations between the effect estimates for the associated eQTLs and learning. Mad is less correlated with memory. 
+
+Mad
+Learn: `r max(abs(subset(ll.sub, gname=="Mad")$corEff))`
+Mem: `r max(abs(subset(mm.sub, gname=="Mad")$corEff))`
+
+Hydr2
+Learn: `r max(abs(subset(ll.sub, gname=="Hydr2")$corEff))`
+Mem: `r max(abs(subset(mm.sub, gname=="Hydr2")$corEff))`
+
+No eQTL data on CG34393- is most sigificant for learning - FC is in same direction for mem
+
+### Q5
+
+```{r}
+
+mm <- 2 
+ll <- 2
+cc.ll <- ci.peak[[1]][ll,]
+cc.mm <- ci.peak[[2]][mm,]
+
+ll.sub <- learn.list[[ll]]
+mm.sub <- Mem.list[[mm]]
+
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+mm.sub[which.max(abs(mm.sub$rMem)),]
+
+ll.sub[which.max(abs(ll.sub$corEff)),]
+mm.sub[which.max(abs(mm.sub$corEff)),]
+
+
+L.cands <- c("chm","Nlg2","Pvf3","Myo28B1")
+ll.sub[ll.sub$gname %in% L.cands,]
+
+```
+
+Obp28a and Cyp4d21 are in both CIs. Obp28a trend in the same direction, Cyp4d21 opposite. Obp28a - odorant binding- nervous system. Cyp4d21 nothing in flybase to suggest role - low expression? Neither have an eQTL. 
+
+Obp28a
+Learning FC: `r subset(ll.sub, gname=="Obp28a")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="Obp28a")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="Obp28a")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="Obp28a")$padj[1]`
+
+Cyp4d21
+Learning FC: `r subset(ll.sub, gname=="Cyp4d21")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="Cyp4d21")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="Cyp4d21")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="Cyp4d21")$padj[1]`
+
+In the eQTL dataset, there are some genes with highly correlated effect estimates with Learning. CG6739 is also highly correlated in memory. It is not DE for either learning or memory.
+
+
+Other candidates (from FlyBase & Patricka) are `r L.cands` but those are not in the memory interval. 
+
+### Q9
+
+```{r}
+
+ll <- 5
+mm <- 4 
+
+cc.ll <- ci.peak[[1]][ll,]
+cc.mm <- ci.peak[[2]][mm,]
+
+ll.sub <- learn.list[[ll]]
+mm.sub <- Mem.list[[mm]]
+
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+mm.sub[which.max(abs(mm.sub$rMem)),]
+
+ll.sub[which.max(abs(ll.sub$corEff)),]
+mm.sub[which.max(abs(mm.sub$corEff)),]
+
+L.cands <- c("MsR2","Fife")
+ll.sub[ll.sub$gname %in% L.cands,]
+
+```
+
+mwh - sensory hairs, frizzled pathway
+tfc ?
+
+mwh
+Learning FC: `r subset(ll.sub, gname=="mwh")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="mwh")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="mwh")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="mwh")$padj[1]`
+
+There are a few other possible genes that are DE and have a cis eQTL. Correlations are hard to interpret- there are several low count haplotypes.
+
+Other candidates (from FlyBase & Patricka) are `r L.cands` but those are not in the memory interval and do not have a cis eQTL. 
+
+### Q11
+
+```{r}
+ll <- 7
+mm <- 5 
+
+cc.ll <- ci.peak[[1]][ll,]
+cc.mm <- ci.peak[[2]][mm,]
+
+ll.sub <- learn.list[[ll]]
+mm.sub <- Mem.list[[mm]]
+
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+mm.sub[which.max(abs(mm.sub$rMem)),]
+
+ll.sub[which.max(abs(ll.sub$corEff)),]
+mm.sub[which.max(abs(mm.sub$corEff)),]
+
+
+
+```
+
+Two genes are in both intervals. Both have a cis eQTL. GstO1 fold changes are different for learning and memory. Trend in the same direction for ergic53. 
+
+ergic53
+Learning FC: `r subset(ll.sub, gname=="ergic53")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="ergic53")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="ergic53")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="ergic53")$padj[1]`
+
+GstO1
+Learning FC: `r subset(ll.sub, gname=="GstO1")$log2FoldChange[1]`
+Learning pval: `r subset(ll.sub, gname=="GstO1")$padj[1]`
+
+Memory FC: `r subset(mm.sub, gname=="GstO1")$log2FoldChange[1]`
+Memory pval: `r subset(mm.sub, gname=="GstO1")$padj[1]`
+
+Both ergic53 has high correlations between the effect estimates for the associated eQTLs and learning. GstO1 is lower. Interpret with caution - some missing haplotypes.  
+
+ergic53 (flybase- pain response defective)
+Learn: `r max(abs(subset(ll.sub, gname=="ergic53")$corEff))`
+Mem: `r max(abs(subset(mm.sub, gname=="ergic53")$corEff))`
+
+GstO1
+Learn: `r max(abs(subset(ll.sub, gname=="GstO1")$corEff))`
+Mem: `r max(abs(subset(mm.sub, gname=="GstO1")$corEff))`
+
+### Q12
+
+```{r}
+ll <- 8
+mm <- 6 
+
+cc.ll <- ci.peak[[1]][ll,]
+cc.mm <- ci.peak[[2]][mm,]
+
+ll.sub <- learn.list[[ll]]
+mm.sub <- Mem.list[[mm]]
+
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+mm.sub[which.max(abs(mm.sub$rMem)),]
+
+ll.sub[which.max(abs(ll.sub$corEff)),]
+mm.sub[which.max(abs(mm.sub$corEff)),]
+
+foc.peak<-ci.peak[['Memory_Mean']][mm,]
+  mw <- (which(Learn_gene_list_sub$chr==foc.peak$chr & 
+                 ((Learn_gene_list_sub$startp <= foc.peak$upR6 & Learn_gene_list_sub$stopp >= foc.peak$lpR6))))
+
+  ll.temp <- Learn_gene_list_sub[mw,]
+  
+  ll.temp[which.min(ll.temp$padj),]
+  
+```
+
+There are no DE genes for memory in the memory interval. The learning QTL spans the centromere. There are no learning DE genes in the MEMORY interval. There are DE genes in the learning interval but it is wide.
+
+
+## Learning peaks
+
+### Q1
+
+```{r}
+#Q1
+
+ll <- 12
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+L.cands <- c("Shmt", "Ca-alpha1T")
+ll.sub[ll.sub$gname %in% L.cands,]
+
+```
+
+There are several DE genes with cis eQTLs in the interval. Of these, ogre, CG14440, and CG5937 have high effect correlations. ogre has the highest effect and phenotypic correlation with learning. ogre is involved in the CNS -  most evidence is for visual system. 
+
+ogre effect cor: `r max(abs(subset(ll.sub, gname=="ogre")$corEff))`
+pheno core: `r max(abs(subset(ll.sub, gname=="ogre")$rLearn))`
+fold change: `r subset(ll.sub, gname=="ogre")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="ogre")$padj[1]`
+
+The most DE gene is CG14445, which does not have a cis eQTL. Little info on flybase.
+
+CG14445 
+FC: `r subset(ll.sub, gname=="CG14445")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="CG14445")$padj[1]`
+
+Other candidates (from FlyBase & Patricka) are `r L.cands`. These do not have a cis eQTL but are possible. 
+
+### Q2
+
+```{r}
+
+ll <- 13
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+L.cands <- c("HDAC6","CG8916")
+
+ll.sub[ll.sub$gname %in% L.cands,]
+```
+
+There are several DE genes with cis eQTLs in the interval. Several have high effect correlations. These are: r (some evidence see flybase), shi (lots of evidence see flybase), Gmap (golgi), CG9164 (?), CG6340 (pain response defect), CG9902 (?)
+
+With lots of evidence from flybase: shi 
+
+shi
+FC: `r subset(ll.sub, gname=="shi")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="shi")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="shi")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="shi")$rLearn))`
+
+
+CG34325 is most significant. It has a cis eQTL with a moderate effect correlation and phenotypic correlation.  
+
+sphe has highest fold change. It does not have a cis eQTL.
+
+Lcch3 has some evidence from Flybase but has a low effect correlation and phenotypic correlation. 
+
+Lcch3
+FC: `r subset(ll.sub, gname=="Lcch3")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Lcch3")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Lcch3")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Lcch3")$rLearn))`
+
+
+MIXED BAG.
+
+Other candidates (from FlyBase & Patricka) are `r L.cands`. These do not have a cis eQTL but are possible. 
+
+### Q3
+
+```{r}
+
+ll <- 14
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+```
+
+One DE gene with a cis eQTL (CG7058 - not much on flybase). It is also the most significant & highest fold change. Correlation with expression effects is moderate.
+
+CG7058
+FC: `r subset(ll.sub, gname=="CG7058")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="CG7058")$padj[1]`
+
+CG34401 has a moderate phenotypic correlation with learning and is DE. Flybase indicates it is involved with response to pain stimulus. 
+
+
+### Q7
+
+```{r}
+
+ll <- 3
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+L.cands <- c("Fkbp12","Mctp","Jabba")
+ll.sub[ll.sub$gname %in% L.cands,]
+
+```
+
+There are many DE genes in the interval, 8 with cis eQTL. It has a moderate/high effect correlation and a low phenotypic correlation.  
+
+One of these is known to be involved in learning (5-HT1B).  
+FC: `r subset(ll.sub, gname=="5-HT1B")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="5-HT1B")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="5-HT1B")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="5-HT1B")$rLearn))`
+
+Jheh2 is on Patricka's list (reason?). It has a moderate effect correlation and moderate phenotypic correlation. 
+
+Jheh2
+FC: `r subset(ll.sub, gname=="Jheh2")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Jheh2")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Jheh2")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Jheh2")$rLearn))`
+
+
+Most significant DE are the Dpt genes (A & B). Involved in immune response and on Patricka's list (reason?). These do not have a  cis eQTL. Low phenotypic correlations with learning. 
+DptA
+FC: `r subset(ll.sub, gname=="DptA")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="DptA")$padj[1]`
+
+DptB
+FC: `r subset(ll.sub, gname=="DptB")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="DptB")$padj[1]`
+
+
+Other candidates (from FlyBase & Patricka) are `r L.cands`. These do not have a cis eQTL but are possible. 
+
+
+### Q8
+
+```{r}
+
+ll <- 4
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+
+```
+
+There are several DE genes in the interval, 4 with cis eQTL. 
+
+Mes4 also has the highest effect correlation. Though p-value is moderate, not strong. wdp is more significant and has a moderate effect correlation. wdp is related to synaptic target recognition among other things. Mes4 is expressed in the nervous system and is a target of a transcription factor.
+
+Liprin-gamma is involved in synapse formation.
+
+
+Mes4
+FC: `r subset(ll.sub, gname=="Mes4")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Mes4")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Mes4")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Mes4")$rLearn))`
+
+wdp
+FC: `r subset(ll.sub, gname=="wdp")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="wdp")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="wdp")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="wdp")$rLearn))`
+
+
+### Q10
+
+```{r}
+
+ll <- 6
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+
+```
+
+There are several DE genes in the interval, 3 with cis eQTL.
+
+Mp has the highest effect correlation of these 3 and is known to be involved in the nervous system (see flybase)
+
+Mp
+FC: `r subset(ll.sub, gname=="Mp")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Mp")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Mp")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Mp")$rLearn))`
+
+dikar is in the interval but is not significantly DE. It is correlated with learning (phenotypic). It does not have a cis eQTL. It is involved in long term memory. 
+
+dikar
+FC: `r subset(ll.sub, gname=="dikar")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="dikar")$padj[1]`
+pheno Learn: `r subset(ll.sub, gname=="dikar")$rLearn`
+
+
+
+### Q13
+
+```{r}
+
+ll <- 9
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+
+```
+
+There are many DE genes in the interval, many with cis eQTL, making it hard to hone in on one candidate. There are several promising candidates with different lines of evidence. 
+
+
+GluClalpha (Glutamate-gated chloride channel subunit, involved in neuronal processes - see Flybase). Correlation with effects is high. Phenotypic is low. 
+
+GluClalpha
+FC: `r subset(ll.sub, gname=="GluClalpha")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="GluClalpha")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="GluClalpha")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="GluClalpha")$rLearn))`
+
+
+
+Grik is most significant (highly). Phenotypic correlation is moderate, effect correlation is moderate/low. Glutamate receptor - involved in neuronal processes - see flybase. 
+Grik
+FC: `r subset(ll.sub, gname=="Grik")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Grik")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Grik")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Grik")$rLearn))`
+
+
+Gfrl is significant, has high effect correlation, some phenotypic correlation. Nervous system development
+Gfrl
+FC: `r subset(ll.sub, gname=="Gfrl")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Gfrl")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Gfrl")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Gfrl")$rLearn))`
+
+KaiR1D is significant, has moderate effect correlation, some phenotypic correlation. Neuronal processes-see flybase
+KaiR1D
+FC: `r subset(ll.sub, gname=="KaiR1D")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="KaiR1D")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="KaiR1D")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="KaiR1D")$rLearn))`
+
+
+Ktl is involved in locomoter behavior. It is only moderately significant. Has a moderate effect correlation, low phenotypic.
+
+Ktl
+FC: `r subset(ll.sub, gname=="Ktl")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Ktl")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Ktl")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Ktl")$rLearn))`
+
+ort is involved in temperature preference. It has a cis eQTL but is not correlated with the QTL effects or phenotypically. 
+
+ort
+FC: `r subset(ll.sub, gname=="ort")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="ort")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="ort")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="ort")$rLearn))`
+
+Rh3 and SIFaR are on Patricka's list but do not have a cis eQTL
+
+Rh3
+FC: `r subset(ll.sub, gname=="Rh3")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Rh3")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Rh3")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Rh3")$rLearn))`
+
+SIFaR
+FC: `r subset(ll.sub, gname=="SIFaR")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="SIFaR")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="SIFaR")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="SIFaR")$rLearn))`
+
+
+### Q14
+
+```{r}
+
+ll <- 10
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+subset(ll.sub, gname=="Nrx-1")
+
+```
+
+There are a few DE genes in the interval,  three with cis eQTL.
+
+Octbeta1R is most promising based on flybase info- several lines of evidence pointing to neuronal processes. It has a high effect correlation and a moderate phenotypic correlation. 
+
+AdipoR has a modest fold change and is not highly correlated with effects or phenotypically. Flybase suggests it is involved in metabolism/insulin signaling. 
+
+CG7054 is the most significant of these, and is most correlated phenotypically with learning. Flybase suggests it is involved with immune response. 
+
+Octbeta1R
+FC: `r subset(ll.sub, gname=="Octbeta1R")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="Octbeta1R")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="Octbeta1R")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="Octbeta1R")$rLearn))`
+
+
+Nrx-1 is on Patricka's list but does not have a cis eQTL.
+
+### Q16
+
+```{r}
+
+ll <- 11
+cc.ll <- ci.peak[[1]][ll,]
+ll.sub <- learn.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rLearn)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+
+```
+
+There are a few DE genes in the interval,  two with cis eQTL.
+
+unc80 is involved with locomoter rhthym  (see flybase) and has a high effect correlation (phenotypic is lower). It is also the most significant DE gene.
+
+unc80
+FC: `r subset(ll.sub, gname=="unc80")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="unc80")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="unc80")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="unc80")$rLearn))`
+
+Tusp is also possible based on flybase terms. There is no cis eQTL and no info about correlation phenotypically. 
+
+
+### Q6
+
+```{r}
+
+ll <- 3
+cc.ll <- ci.peak[[2]][ll,]
+ll.sub <- Mem.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rMem)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+nn<-ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+nn[-which(nn$gname %in% c("CAP", "KCNQ")),]
+
+subset(ll.sub, gname=="Hdc")
+       
+```
+
+There are a several DE genes in the interval,  eleven with cis eQTL.
+
+Of the genes with a cis eQTL:
+
+CG1441 is most signficant.
+
+CG1441
+FC: `r subset(ll.sub, gname=="CG1441")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="CG1441")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="CG1441")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="CG1441")$rLearn))`
+
+
+CG1698 is involved in neurotransmitter transporter activity
+
+CG1698
+FC: `r subset(ll.sub, gname=="CG1698")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="CG1698")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="CG1698")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="CG1698")$rLearn))`
+
+KCNQ voltage gated channel - heart? moderate effect correlation & phenotypic
+
+KCNQ
+FC: `r subset(ll.sub, gname=="KCNQ")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="KCNQ")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="KCNQ")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="KCNQ")$rLearn))`
+
+CAP - sensory processes, neuronal processes, low/moderate effect correlation & moderate phenotypic correlation
+
+CAP
+FC: `r subset(ll.sub, gname=="CAP")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="CAP")$padj[1]`
+corr Eff : `r max(abs(subset(ll.sub, gname=="CAP")$corEff))`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="CAP")$rLearn))`
+
+Hdc is another candidate from Flybase & Patricka. It does not have a cis eQTL.
+
+### Q15
+
+```{r}
+
+ll <- 7
+cc.ll <- ci.peak[[2]][ll,]
+ll.sub <- Mem.list[[ll]]
+
+ll.sub[which.max(abs(ll.sub$log2FoldChange)),]
+ll.sub[which.min(ll.sub$padj),]
+ll.sub[which.max(abs(ll.sub$rMem)),]
+ll.sub[which.max(abs(ll.sub$corEff)),]
+
+ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]
+
+unique(ll.sub[which(ll.sub$padj <= 0.05 & is.na(ll.sub$corEff)==FALSE),]$gname)
+
+```
+
+There are only a few DE genes in the interval, none with cis eQTL. Genes with a high effect correlation, are not a significant DE gene.
+
+hh is most significant. 
+
+FC: `r subset(ll.sub, gname=="hh")$log2FoldChange[1]`
+pval: `r subset(ll.sub, gname=="hh")$padj[1]`
+pheno Learn: `r max(abs(subset(ll.sub, gname=="hh")$rLearn))`
+
+

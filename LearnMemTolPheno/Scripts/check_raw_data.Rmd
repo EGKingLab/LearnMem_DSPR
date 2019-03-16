@@ -1,0 +1,410 @@
+---
+title: "Check Raw Data"
+author: "Patricka Williams-Simon and Elizabeth King"
+date: "4/19/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(cowplot)
+```
+
+## Read in Data
+
+There are three files. The raw data for Thermal Tolerance, the raw data for Learning and Memory, and the Learning and Memory data processed through HeatCalc. 
+
+```{r}
+#raw learning and memory data
+#named LearnMem
+load(file="../ProcessedData/Learn_raw.rda")
+
+
+#learning and memory data processed through HeatCalc
+LM_proc <- read.table(file="../ProcessedData/HeatProc_Learn.txt", sep="\t", header=TRUE, stringsAsFactors = FALSE)
+
+
+#raw thermal tolerance data
+#Named ThermTol
+load(file="../ProcessedData/Incapacitation.rda")
+
+```
+
+## Assign chamber and group number to processed data
+
+Group numbers were assigned inconsistently and so we need to merge these to track a sample through all phenotypes (& processed and raw). Patricka always numbered her groups sequentially and before James's. Therefore, James's were numbered starting following Patricka's groups. There are also a few errors that get fixed here in group assignment.
+
+```{r}
+
+LearnMem[which(LearnMem$patRIL==12127 & LearnMem$group==12),'group'] <- 1
+
+LearnMem[which(LearnMem$patRIL==12127 & LearnMem$group==12),'file'] <- "Group 1.asc"
+
+
+LM_proc$chamber <- LM_proc$chamber+1
+LM_proc[which(LM_proc$patRIL==11019 & LM_proc$file=="5-2.hbx"),'file']<-"5.hbx"
+LM_proc[which(LM_proc$patRIL==11097 & LM_proc$file=="2-2.hbx"),'file']<-"2.hbx"
+LM_proc[which(LM_proc$patRIL==11104 & LM_proc$file=="4-1.hbx"),'file']<-"4.hbx"
+LM_proc[which(LM_proc$patRIL==11138 & LM_proc$file=="Group5.hbx"),'file']<-"5.hbx"
+
+LM_proc <- LM_proc[-which(LM_proc$patRIL==11040 & LM_proc$file=="11040_001A_6min.hbx"),]
+
+rrs<-unique(LM_proc$patRIL)
+
+LM_procg<-LM_proc[0,]
+LM_procg$group <-numeric(0)
+for(rr in rrs)
+{
+  ss.test <- subset(LM_proc, patRIL==rr)
+  
+  gg.s <-unlist(lapply(strsplit(ss.test$file, split=".", fixed=TRUE),function(x) x[1]))
+  gg.num <- rep(NA, length(gg.s))
+  nn <- nchar(gg.s)
+  if(all(nn>2))
+  {
+    uus<-unique(gg.s)
+    tts<-seq(1,length(uus))
+    for(i in 1:length(uus))
+    {
+      gg.num[gg.s==uus[i]]<-tts[i]
+    }
+  }else{
+    if(any(nn>2))
+    {
+      gg.num[nn<=2]<-as.numeric(gg.s[nn<=2])
+      uus<-unique(gg.s[nn>2])
+      tts<-seq((max(gg.num,na.rm=T)+1),(max(gg.num,na.rm=T)+length(uus)))
+      for(i in 1:length(uus))
+      {
+        gg.num[gg.s==uus[i]]<-tts[i]
+      }
+      
+    }else{
+      gg.num<-as.numeric(gg.s)
+    }
+  }
+  ss.test$group<-gg.num
+  LM_procg<-rbind(LM_procg,ss.test)
+  #cat(rr,"\n")
+}
+
+wset <- which(as.numeric(ThermTol$group)>19)
+ThermTol$group[wset] <- substr(ThermTol$group[wset], 1, nchar(ThermTol$group[wset])-1)
+
+wset <- which(as.numeric(LearnMem$group)>19)
+LearnMem$group[wset] <- substr(LearnMem$group[wset], 1, nchar(LearnMem$group[wset])-1)
+
+
+ThermTol$group <- as.numeric(ThermTol$group)
+LearnMem$group <- as.numeric(LearnMem$group)
+
+#check for duplicates
+
+aa <- which(duplicated(ThermTol[,1:17], MARGIN=1))
+bb <- which(duplicated(ThermTol[,1:17], MARGIN=1,fromLast=TRUE))
+
+uu.therm<-unique(ThermTol[c(aa,bb),'patRIL'])
+
+table(ThermTol[c(aa,bb),c('patRIL','group')])
+
+aa <- which(duplicated(LM_procg[,1:5], MARGIN=1))
+bb <- which(duplicated(LM_procg[,1:5], MARGIN=1,fromLast=TRUE))
+
+uu.LM<-unique(LM_procg[c(aa,bb),'patRIL'])
+
+table(LM_procg[c(aa,bb),c('patRIL','group')])
+
+aa <- which(duplicated(LearnMem[,1:7], MARGIN=1))
+bb <- which(duplicated(LearnMem[,1:7], MARGIN=1,fromLast=TRUE))
+uu.LMR<-unique(LearnMem[c(aa,bb),'patRIL'])
+
+table(LearnMem[c(aa,bb),c('patRIL','group')])
+
+```
+
+## Identify chambers with temperature issues
+
+```{r}
+#max average absolute difference between set and actual for Learning and Mem
+topdif<-5
+
+# lowest allowable average temp across the chamber during training for Thermal Tolerance
+lowtem<-35
+
+notgood <- which(ThermTol$actual.Temp.train.A < lowtem |ThermTol$actual.Temp.train.B < lowtem | ThermTol$incapacitation==0)
+ThermTol.keep <- ThermTol[-notgood,]
+#which chambers?
+
+
+#Learn Mem
+ww <- which(LearnMem$diff.train.A >= topdif|LearnMem$diff.train.B >= topdif)
+LearnMem.good<-LearnMem[-ww,]
+
+#Bring all data together
+all.dat <- merge(LearnMem,ThermTol,by=c('patRIL','chamber','group'),all=TRUE)
+
+#add a flag column for failure criteria
+pL <- which(all.dat$diff.train.A >= topdif|all.dat$diff.train.B >= topdif)
+pT <- which(all.dat$actual.Temp.train.A < lowtem |all.dat$actual.Temp.train.B < lowtem)
+pB <- which((all.dat$actual.Temp.train.A < lowtem |all.dat$actual.Temp.train.B < lowtem) & (all.dat$diff.train.A >= topdif|all.dat$diff.train.B >= topdif))
+
+all.dat$flag <- rep('none',nrow(all.dat))
+all.dat$flag[pL] <- 'LearnFail'
+all.dat$flag[pT] <- 'ThermFail'
+all.dat$flag[pB] <- 'BothFail'
+
+#merge with processed data
+total.set <- merge(all.dat,LM_procg,by=c('patRIL','chamber','group'),all=TRUE)
+
+temp <- subset(total.set, flag=='LearnFail')
+temp <- temp[-which(is.na(temp$actual.Temp.test.A)),]
+temp <- temp[-which(is.na(temp$Learning)),]
+
+temp1 <- subset(total.set, flag=='ThermFail')
+temp1 <- temp1[-which(is.na(temp1$diff.train.A)),]
+temp1 <- temp1[-which(is.na(temp1$Learning)),]
+
+#add flag for those that stop moving on punishment side
+pA <- which(total.set$ThermAct==0 & total.set$Memory== -1)
+total.set$dflag <- rep('none', nrow(total.set))
+total.set$dflag[pA] <- 'dead'
+
+```
+
+Here we use the temperature data to identify problem chambers. For thermal tolerance, if the average temperature over the assay is less than `r lowtem`, we flagged it as problematic. For learning and memory, if the absolute value of the average temperature was greater than `r topdif`, we flagged it as problematic. There are very few chambers flagged as problematic for learning that are not also problematic for thermal tolerance (`r nrow(temp)` records). There are more that are flagged for thermal tolerance but not for learning (`r nrow(temp1)` records). This could be occuring when the punishment side is NOT the side with the problem.   
+
+## Visualization of the Temperature Issue
+
+We can examine the distributions for the temperature data here. 
+
+```{r warning = FALSE, message = FALSE}
+
+p1 <- ggplot(total.set, aes(diff.test.A)) +
+  geom_histogram() 
+p2 <- ggplot(total.set, aes(diff.test.B)) +
+  geom_histogram()
+p3 <- ggplot(total.set, aes(diff.train.A)) +
+  geom_histogram()
+p4 <- ggplot(total.set, aes(diff.train.B)) +
+  geom_histogram()
+
+lm1 <- plot_grid(p1, p2, p3, p4, ncol=2)
+
+cat('Learning and Memory Raw Data',"\n")
+lm1
+
+total.set.proc.kept <- total.set[-which(is.na(total.set$Learning)),]
+
+p1 <- ggplot(total.set.proc.kept, aes(diff.test.A)) +
+  geom_histogram()
+p2 <- ggplot(total.set.proc.kept, aes(diff.test.B)) +
+  geom_histogram()
+p3 <- ggplot(total.set.proc.kept, aes(diff.train.A)) +
+  geom_histogram()
+p4 <- ggplot(total.set.proc.kept, aes(diff.train.B)) +
+  geom_histogram()
+
+
+lm2 <- plot_grid(p1, p2, p3, p4, ncol=2)
+
+cat('Learning and Memory Post HeatCalc',"\n")
+lm2
+
+p1 <- ggplot(total.set, aes(actual.Temp.test.A)) +
+  geom_histogram() 
+p2 <- ggplot(total.set, aes(actual.Temp.test.B)) +
+  geom_histogram()
+p3 <- ggplot(total.set, aes(actual.Temp.train.A)) +
+  geom_histogram()
+p4 <- ggplot(total.set, aes(actual.Temp.train.B)) +
+  geom_histogram()
+
+tt1 <- plot_grid(p1, p2, p3, p4, ncol=2)
+cat('Thermal Tolerance',"\n")
+tt1
+
+p1 <- ggplot(total.set[total.set$flag=='BothFail',], aes(actual.Temp.train.A)) +
+  geom_histogram() 
+p2 <- ggplot(total.set[total.set$flag=='BothFail',], aes(actual.Temp.train.B)) +
+  geom_histogram()
+p3 <- ggplot(total.set[total.set$flag=='BothFail',], aes(diff.train.A)) +
+  geom_histogram()
+p4 <- ggplot(total.set[total.set$flag=='BothFail',], aes(diff.train.B)) +
+  geom_histogram()
+
+bothF <- plot_grid(p1, p2, p3, p4, ncol=2)
+cat('Fail Both Criteria',"\n")
+bothF
+
+
+p1 <- ggplot(total.set[total.set$flag=='ThermFail',], aes(actual.Temp.train.A)) +
+  geom_histogram() 
+p2 <- ggplot(total.set[total.set$flag=='ThermFail',], aes(actual.Temp.train.B)) +
+  geom_histogram()
+p3 <- ggplot(total.set[total.set$flag=='ThermFail',], aes(diff.train.A)) +
+  geom_histogram()
+p4 <- ggplot(total.set[total.set$flag=='ThermFail',], aes(diff.train.B)) +
+  geom_histogram()
+
+ThF <- plot_grid(p1, p2, p3, p4, ncol=2)
+cat('Fail Thermal Tolerance Criteria',"\n")
+ThF
+
+p1 <- ggplot(total.set[total.set$flag=='LearnFail',], aes(actual.Temp.train.A)) +
+  geom_histogram() 
+p2 <- ggplot(total.set[total.set$flag=='LearnFail',], aes(actual.Temp.train.B)) +
+  geom_histogram()
+p3 <- ggplot(total.set[total.set$flag=='LearnFail',], aes(diff.train.A)) +
+  geom_histogram()
+p4 <- ggplot(total.set[total.set$flag=='LearnFail',], aes(diff.train.B)) +
+  geom_histogram()
+
+LF <- plot_grid(p1, p2, p3, p4, ncol=2)
+cat('Fail Learning Criteria',"\n")
+LF
+```
+
+## Explore cases where activity ceases for an individual before the end of the trial 
+
+```{r}
+#Select cases where there is  no activity for thermal tolerance but are learning records
+act.ss <-which(total.set$ThermAct==0 & is.na(total.set$Learning)==FALSE)
+act.ss <- total.set[act.ss,]
+
+cat('Number in each chamber:')
+table(act.ss$chamber)
+
+cat('Most do not become active again after a period of no activity')
+hist(act.ss$ActRvar)
+
+cat('Distribution of Memory scores for these records')
+hist(act.ss$Memory)
+
+
+cat('Distribution of Memory scores for all data')
+hist(total.set$Memory)
+
+tester_mem<-subset(act.ss, Memory > -0.9 & Memory < 0.9)
+#memory scores between -0.9 and 0.9
+tester_mem[1:10, 1:3]
+
+#high activty
+tester_active<-subset(act.ss, ActRvar>1000 & ActStop>2e5)
+tester_active[1:10, 1:3]
+  
+#low activity
+tester_lowactive<-subset(act.ss, ActRvar<10 & ActStop<1e5)
+tester_lowactive[1:10, 1:3]
+
+
+```
+
+Most of the cases where there is no activity in thermal tolerance but there is a learning & memory score occur in chambers 12 and 14, indicating a possible issue specific to those chambers. In the majority of cases, activty stops early and does not resume causing memory scores of 1 or -1, most often -1. 
+
+## Filtering
+
+Here we filter out bad records. We have filtered out any that fail the thermal tolerance criteria for thermal tolerance and any that fail FOR ANY REASON for the learning data. The numbers of RILs we remain with are shown here.
+
+```{r  warning = FALSE, message = FALSE}
+
+LL.set <- subset(total.set, flag == 'none' & dflag == 'none')
+cut.s <- which(is.na(LL.set$Learning))
+LL.set <- LL.set[-cut.s,]
+
+LL.count <-as.data.frame(table(LL.set$patRIL))
+colnames(LL.count) <- c('patRIL','count')
+checkL <- LL.count[which(LL.count$count<55),]
+
+TT.count <-as.data.frame(table(ThermTol.keep$patRIL))
+colnames(TT.count) <- c('patRIL','count')
+
+checkR <- TT.count[which(TT.count$count<55),]
+
+p1 <- ggplot(LL.count, aes(count)) +
+  geom_histogram() +
+  ggtitle("Learning & Memory")
+
+p2 <- ggplot(TT.count, aes(count)) +
+  geom_histogram() +
+  ggtitle("Thermal Tolerance")
+
+plot_grid(p1, p2, ncol=2)
+
+```
+
+### Thermal Tolerance:
+
+The lowest count is `r min(TT.count$count)`. 
+
+`r nrow(TT.count[TT.count$count<60,])` RILs have fewer than 60.
+
+`r nrow(TT.count[TT.count$count<55,])` RILs have fewer than 55.
+
+`r nrow(TT.count[TT.count$count<50,])` RILs have fewer than 50.
+
+`r nrow(TT.count[TT.count$count<40,])` RILs have fewer than 40.
+
+### Learning & Memory:
+
+The lowest count is `r min(LL.count$count)`. 
+
+`r nrow(LL.count[LL.count$count<60,])` RILs have fewer than 60.
+
+`r nrow(LL.count[LL.count$count<55,])` RILs have fewer than 55.
+
+`r nrow(LL.count[LL.count$count<50,])` RILs have fewer than 50.
+
+`r nrow(LL.count[LL.count$count<40,])` RILs have fewer than 40.
+
+
+Some final checking:
+
+```{r}
+
+
+TT.count$patRIL[which(!(TT.count$patRIL %in% LL.count$patRIL))]
+
+LL.count$patRIL[which(!(LL.count$patRIL %in% TT.count$patRIL))]
+
+total.set.proc.kept <- total.set[-which(is.na(total.set$Learning)),]
+
+raw.proc.learn.rils <- unique(total.set.proc.kept[which(is.na(total.set.proc.kept$diff.train.A)),'patRIL'])
+
+for(rr in raw.proc.learn.rils)
+{
+  set.temp <- subset(total.set, patRIL==rr)
+  cat(rr,"\n","groups:", sort(unique(set.temp$group)),"\n",
+      "learn files:", sort(unique(set.temp$file.x)), "\n",
+      "therm files:", sort(unique(set.temp$file.y)), "\n",
+      "learn heat calc files:", sort(unique(set.temp$file)),"\n","\n")
+  
+  
+}
+
+raw.proc.therm.rils <- unique(total.set[which(is.na(total.set$incapacitation)),'patRIL'])
+
+for(rr in raw.proc.therm.rils)
+{
+  set.temp <- subset(total.set, patRIL==rr)
+  cat(rr,"\n","groups:", sort(unique(set.temp$group)),"\n",
+      "learn files:", sort(unique(set.temp$file.x)), "\n",
+      "therm files:", sort(unique(set.temp$file.y)), "\n",
+      "learn heat calc files:", sort(unique(set.temp$file)),"\n","\n")
+  
+  
+}
+
+
+
+
+```
+
+## Write out final files
+
+```{r}
+write.table(ThermTol.keep,file= "../ProcessedData/ThermalTol_processed.txt",row.names=FALSE,sep="\t")
+
+write.table(LL.set,file= "../ProcessedData/LearnMem_processed.txt",row.names=FALSE,sep="\t")
+```
+

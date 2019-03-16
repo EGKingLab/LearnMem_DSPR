@@ -1,0 +1,224 @@
+---
+title: "visualizing_pheno_data"
+author: "Patricka Williams-Simon"
+date: "7/19/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(cowplot)
+library(dplyr)
+library(ggrepel)
+source(file="../../Functions/ggplot_theme.R")
+```
+
+#read or load in flies
+
+```{r}
+#make individual plots
+rawdLM <- read.table("../ProcessedData/LearnMem_processed.txt",sep="\t", header=TRUE, stringsAsFactors = FALSE)
+str(rawdLM)
+
+rawdTT <- read.table("../ProcessedData/ThermalTol_processed.txt",sep="\t", header=TRUE, stringsAsFactors = FALSE)
+str(rawdTT)
+
+#make mean graphs
+load(file="../ProcessedData/L_MDATA.rda")
+load(file="../ProcessedData/T_TDATA.rda")
+
+#RILs that we used in RNAseq
+RIL_rna <- data.frame("Pool"= rep(c('LH','LL','MH','ML','TH','TL'),each=7), 
+                      "patRIL"= c(11065,12359,11146,11144,11006,11122,11023,
+                                  12044,12285,12138,12022,11189,12084,12324,
+                                  12018,12039,12074,11184,12071,11122,11023,
+                                  12383,12030,12285,11189,11038,11133,11186,
+                                  12069,12062,11024,11023,11067,11163,11043,
+                                  12047,12290,12042,11106,12060,11042,11132),
+                      stringsAsFactors = FALSE)
+write.table(RIL_rna, file="../../LearnMemTolRnaseq/DEseq_LearnMemTol/Data/RILs_in_pools.txt",sep="\t",row.names=FALSE)
+```
+
+
+#re-order form min to max
+
+```{r}
+rawdLM$Lname <- with(rawdLM, reorder(patRIL, Learning, function(x) mean(x)))
+levels(rawdLM$Lname) <- c(levels(rawdLM$Lname),'axhold1','axhold2')
+rawdLM$Mname <- with(rawdLM, reorder(patRIL, Memory, function(x) mean(x)))
+levels(rawdLM$Mname) <- c(levels(rawdLM$Mname),'axhold1','axhold2')
+rawdTT$Tname <- with(rawdTT, reorder(patRIL, incapacitation, function(x) mean(x)))
+
+rr.temp <- rawdLM[1,]
+rr.temp[,1:6] <- NA
+rr.temp[,7:8] <- 'axhold1'
+
+rawdLM <- rbind(rawdLM, rr.temp)
+
+rr.temp <- rawdLM[1,]
+rr.temp[,1:6] <- NA
+rr.temp[,7:8] <- 'axhold2'
+
+rawdLM <- rbind(rawdLM, rr.temp)
+
+```
+
+## Visualize Learning phenotype data (individual plots)
+
+```{r}
+##using ggplot2
+
+LL.rna <- subset(RIL_rna, Pool %in% c('LL')) 
+LH.rna <- subset(RIL_rna, Pool %in% c('LH')) 
+LL.rna <- rawdLM[rawdLM$patRIL %in% LL.rna$patRIL,c('Lname','patRIL')]
+LL.rna <- unique(LL.rna, MARGIN=1)
+LH.rna <- rawdLM[rawdLM$patRIL %in% LH.rna$patRIL,c('Lname','patRIL')]
+LH.rna <- unique(LH.rna, MARGIN=1)
+
+Learn_indi_points <- ggplot(rawdLM, aes(x = Lname, y = Learning)) +
+  geom_point(size = 0.01, alpha = 1/8) +
+  stat_summary(fun.y = mean,
+               position = position_dodge(width = 0.5),
+               geom = "point",
+               color = "red",
+               size = 0.01, alpha = 1/2) +
+  stat_summary(fun.data = mean_se, 
+               geom = "errorbar", 
+               color = 'red', width=0, size=0.3, alpha=1/2) +
+  geom_point(data=LL.rna, 
+             aes(x=Lname, y=-1.05), 
+             pch=17, alpha = 0.6, color='darkcyan', size = 1) +
+  geom_text_repel(data=LL.rna, 
+             aes(x=Lname, y=-1.05, label=patRIL), 
+            size = 2 , direction="x", nudge_y = -0.6,
+            angle = 270, color='darkcyan', segment.size = 0.2, box.padding=0.25) +
+  #geom_text(data=LL.rna[LL.rna$patRIL == '11189',], 
+  #           aes(x=Lname, y=-1.05, label=patRIL), 
+  #          size = 1.5, hjust = -0.2 ,vjust = 0.7, 
+  #          angle = 70, color='darkcyan') +
+  geom_point(data=LH.rna, 
+             mapping=aes(x=Lname, y=-1.05), 
+             pch=17, alpha= 0.6, color='darkorchid', size = 1) +
+  geom_text_repel(data=LH.rna, 
+             aes(x=Lname, y=-1.05, label=patRIL), 
+            size = 2, direction="x", nudge_y = -0.6 ,vjust = 0, 
+            angle = 270, color='darkorchid', segment.size = 0.2,box.padding = 0.25) +
+  theme(legend.position = "none",axis.ticks.x=element_blank()) +
+  xlab("RILs") +
+  ylab("Learning PI") +
+  ylim(c( -1.55, 1))+
+  theme(axis.text.x = element_blank()) +
+  my_theme
+
+#to view plot
+ Learn_indi_points
+
+#to save plot
+ggsave(Learn_indi_points, file="../Plots/Learn_indi_plot.pdf", width=3.5, height=2.5)
+
+```
+
+#Visualize memory phenotypic data
+
+```{r}
+#using ggplot2
+
+ML.rna <- subset(RIL_rna, Pool %in% c('ML')) 
+MH.rna <- subset(RIL_rna, Pool %in% c('MH')) 
+ML.rna <- rawdLM[rawdLM$patRIL %in% ML.rna$patRIL,c('Mname','patRIL')]
+ML.rna <- unique(ML.rna, MARGIN=1)
+MH.rna <- rawdLM[rawdLM$patRIL %in% MH.rna$patRIL,c('Mname','patRIL')]
+MH.rna <- unique(MH.rna, MARGIN=1)
+
+
+Mem_indi_points <- ggplot(rawdLM, aes(x = Mname, y = Memory)) +
+  geom_point(size = 0.01, alpha = 1/8) +
+  stat_summary(fun.y = mean,
+               position = position_dodge(width = 0.5),
+               geom = "point",
+               color = "red",
+               size = 0.01, alpha = 0.5) +
+  stat_summary(fun.data = mean_se, 
+               geom = "errorbar", 
+               color = 'red', width=0, size=0.3, alpha = 0.5) +
+  geom_point(data=ML.rna, 
+             aes(x=Mname, y=-1.05), 
+             pch=17, alpha = 0.6, color='darkcyan',size=1) +
+  geom_text_repel(data=ML.rna, 
+             aes(x=Mname, y=-1.05, label=patRIL), 
+            size = 2, direction="x", nudge_y = -0.6 ,vjust = 0, 
+            angle = 270, segment.size = 0.2, color='darkcyan') +
+  geom_point(data=MH.rna, 
+             mapping=aes(x=Mname, y=-1.05), 
+             pch=17, alpha= 0.6, color='darkorchid', size=1) +
+  geom_text_repel(data=MH.rna, 
+             aes(x=Mname, y=-1.05, label=patRIL), 
+            size = 2, direction="x", nudge_y = -0.6 ,vjust = 0, 
+            angle = 270, color='darkorchid', segment.size = 0.2) +
+  theme(legend.position = "none",axis.ticks.x=element_blank()) +
+  xlab("RILs") +
+  ylab("Memory PI") +
+  ylim(c( -1.55 , 1))+
+  theme(axis.text.x = element_blank()) +
+  my_theme
+
+
+#to view plot
+Mem_indi_points
+
+#to save plot
+ggsave(Mem_indi_points, file="../Plots/Mem_indi_plot.pdf", width=3.5, height=2.5)
+
+#combine
+
+load(file="../Plots/Learn_Mem_Cor.rda")
+
+
+c_plot <- plot_grid(Learn_indi_points, Mem_indi_points, cor_Learn_Mem_plot, nrow=3, labels=c("a.","b.", "c."), label_size=10)
+
+ggsave(c_plot, file="../Plots/Pheno_pattern_LM.pdf", width=3.5, height=7.5)
+
+```
+
+
+```{r}
+#thermal tolerance scatter plot
+
+ThermTol_indi_points <- ggplot(rawdTT, aes(x = Tname, y = incapacitation)) +
+  geom_point(stat = "identity",
+             position = position_dodge(width = 0.5),
+             size = 1,
+             alpha = 1/5) +
+  stat_summary(fun.y = mean,
+               position = position_dodge(width = 0.5),
+               geom = "point",
+               color = "red",
+               size = 1) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", color = 'red') +
+  theme(legend.position = "none") +
+  xlab("741 RILs") +
+  ylab("Incapacitation Time")
+  ylim(c(-1,1))+
+  theme(axis.text.x = element_blank())
+
+#view plot
+ThermTol_indi_points
+
+
+#to save graph
+ggsave(ThermTol_indi_points, file="../Plots/ThermTol_indi_plot.pdf", width=10, height=4)
+
+```
+
+```{r}
+
+cts <- rawdLM %>% group_by(patRIL) %>% tally()
+mean(cts$n)
+
+ggplot(cts, aes(x=n)) +
+  geom_histogram()
+
+```
+
+

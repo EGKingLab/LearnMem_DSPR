@@ -1,0 +1,218 @@
+---
+title: "Visualizing_LMRNA_Data"
+author: "Patricka Williams-Simon"
+date: "8/20/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DESeq2)
+library(dplyr)
+library(stringr)
+library(sva)
+library(ggplot2)
+library(cowplot)
+library(colorspace)
+library(ggrepel)
+
+source(file="../../../Functions/ggplot_theme.R")
+
+options(scipen=10)
+```
+
+# MA plot
+
+```{r}
+load("../Data/LearnresSVOrder.Rda")
+load("../Data/MemresSVOrder.Rda")
+
+ww <-which(LearnresSVorder$padj < 0.05)
+length(ww)
+sig.Lgenes <- LearnresSVorder[ww,]
+nrow(sig.Lgenes[sig.Lgenes$log2FoldChange>0,])
+nrow(sig.Lgenes[sig.Lgenes$log2FoldChange<0,])
+
+ww <-which(MemresSVorder$padj < 0.05)
+length(ww)
+sig.Mgenes <- MemresSVorder[ww,]
+nrow(sig.Mgenes[sig.Mgenes$log2FoldChange>0,])
+nrow(sig.Mgenes[sig.Mgenes$log2FoldChange<0,])
+
+share.wl <- which(rownames(sig.Lgenes) %in% rownames(sig.Mgenes))
+share.wm <- which(rownames(sig.Mgenes) %in% rownames(sig.Lgenes))
+
+LearnresSVorder$gname <- rownames(LearnresSVorder)
+MemresSVorder$gname <- rownames(MemresSVorder)
+
+all.expr <- merge(as.data.frame(LearnresSVorder[share.wl,]), as.data.frame(MemresSVorder[share.wm,]), by="gname")
+
+plot(all.expr$log2FoldChange.x, all.expr$log2FoldChange.y)
+
+length(which(all.expr$log2FoldChange.x > 0 & all.expr$log2FoldChange.y > 0))
+length(which(all.expr$log2FoldChange.x < 0 & all.expr$log2FoldChange.y < 0))
+
+# add known labels to volcanos.
+
+# Could do with built-in DESeq2 function:
+# EGK looked at source code. Plot is x = log(baseMean), y = log fold change
+#LearnMAplot <- DESeq2::plotMA(LearnresSVorder, ylim=c(-4.5,4))
+#MemMAplot <- DESeq2::plotMA(MemresSVorder, ylim=c(-4.5,4))
+#plot matches - scale? need to check.
+
+LearnresSVorder <- subset(LearnresSVorder, baseMean != 0)
+
+LearnresSVorder$sig <- LearnresSVorder$padj
+LearnresSVorder$sig[LearnresSVorder$padj > 0.05] <- NA
+
+LearnresSVorder <- LearnresSVorder[order(-LearnresSVorder$padj, na.last=FALSE),]
+
+
+LearnMAplot <- ggplot(as.data.frame(LearnresSVorder[is.na(LearnresSVorder$sig),]), aes(baseMean, log2FoldChange)) +
+  geom_point(color='pink')+
+  geom_point(data=as.data.frame(LearnresSVorder[is.na(LearnresSVorder$sig)==FALSE,]), aes(baseMean, log2FoldChange,color=sig))+
+  xlab("Normalized Mean Expression")+
+  ylab(expression("log"[2]*"(FC)"))+
+  scale_x_log10() +
+  ylim(c(-4.5,4)) +
+  scale_color_gradient2(low = "steelblue", mid = "grey",
+  high = "pink", midpoint = 0.03,breaks=c(0.049,0.04,0.03,0.02,0.01), labels=c('NS',0.04,0.03,0.02,0.01))+
+  my_theme +
+  theme(legend.position="none")
+
+LearnMAplot
+
+MemresSVorder <- subset(MemresSVorder, baseMean != 0)
+
+MemresSVorder$sig <- MemresSVorder$padj
+MemresSVorder$sig[MemresSVorder$padj > 0.05] <- NA
+
+MemresSVorder <- MemresSVorder[order(-MemresSVorder$padj, na.last=FALSE),]
+
+MemMAplot <- ggplot(as.data.frame(MemresSVorder[is.na(MemresSVorder$sig),]), aes(baseMean, log2FoldChange)) +
+  geom_point(color='pink')+
+  geom_point(data=as.data.frame(MemresSVorder[is.na(MemresSVorder$sig)==FALSE,]), aes(baseMean, log2FoldChange,color=sig))+
+  xlab("Normalized Mean Expression")+
+  ylab(expression("log"[2]*"(FC)"))+
+  ylim(c(-4.5,4)) +
+  scale_x_log10()+
+scale_color_gradient2(name = expression("P"[adj]*""), low = "steelblue", mid = "grey",
+  high = "pink", midpoint = 0.03, breaks=c(0.049,0.04,0.03,0.02,0.01), labels=c('NS',0.04,0.03,0.02,0.01))+
+  my_theme +
+  theme(axis.title.y=element_blank())
+
+MemMAplot
+
+
+
+ggsave(LearnMAplot, file="../Plots/LearnMAplot.pdf", width=10, height=4)
+ggsave(MemMAplot, file="../Plots/MemMAplot.pdf", width=10, height=4)
+
+
+```
+
+#Volcano Plot (ggplot2)
+
+
+```{r}
+
+load("../Data/LearnresSVOrder.Rda")
+load("../Data/MemresSVOrder.Rda")
+
+str(LearnresSVorder)
+
+LearnresSVorder$FBgn <- rownames(LearnresSVorder)
+Learn_sig_genes <- as.data.frame(LearnresSVorder)
+
+MemresSVorder$FBgn <- rownames(MemresSVorder)
+colnames(MemresSVorder)
+
+Mem_sig_genes <- as.data.frame(MemresSVorder)
+
+gene_map_table <- read_lines(file = "../../../LearnMemTolQTL/ProcessedData/gene_map_table_fb_2018_04.tsv",
+                skip = 6) %>% 
+  str_split(pattern = "\t", simplify = TRUE) %>% 
+  as_tibble() %>% 
+  filter(V1 == "Dmel")
+
+colnames(gene_map_table) <- c('spp','gname','FBgn','v3','cyt','pos')
+
+
+gene_map_table$chr <- str_split(gene_map_table$pos, ":",simplify=TRUE)[,1]
+temp.s1 <- str_split(gene_map_table$pos, ":",simplify=TRUE)[,2] %>% 
+  str_split(fixed(".."),simplify=TRUE)
+gene_map_table$startp <- as.numeric(temp.s1[,1])
+
+gene_map_table$stopp <- as.numeric(str_split(temp.s1[,2],fixed("("),simplify = TRUE)[,1])
+
+Learngene_list <- merge(Learn_sig_genes, gene_map_table, by="FBgn")
+Memgene_list <- merge(Mem_sig_genes, gene_map_table, by="FBgn")
+
+
+Learngene_list <-Learngene_list %>% mutate(Learn_Genes = ifelse(padj <= 0.05, "A",ifelse(is.na(padj) , "B", "B")))
+
+
+str(Learngene_list)
+str(Memgene_list)
+
+place.g<- c("FBgn0000479",
+            "FBgn0086782",
+            "FBgn0003996",
+            "FBgn0265597",
+            "FBgn0003301",
+            "FBgn0029095",
+            "FBgn0028978")
+
+
+Learn_Volcanoplot <- ggplot(na.omit(Learngene_list), aes(y=-log10(padj), x=log2FoldChange, color=log10(baseMean), label=gname)) +
+  geom_hline(yintercept=-log10(0.05), color='grey70')+
+  geom_vline(xintercept= -1, color='grey70')+
+  geom_vline(xintercept= 1, color='grey70')+
+  geom_point(size=1.3) +
+  geom_text_repel(data = Learngene_list[Learngene_list$FBgn %in% place.g,], show.legend = FALSE,  fontface='italic', color="grey30", ylim=25, size=3) +
+  
+  ylab(expression("-log"[10]*"(P"[adj]*")")) +
+  xlab(expression("log"[2]*"(FC)"))+
+  xlim(c(-4.5,4)) +
+  ylim(c(0,75)) +
+  my_theme +
+  scale_color_gradientn(breaks = c(2:5), labels = 10^seq(2,5), name = "Mean\nExpression",colours = rainbow_hcl(8, start = 300, end = 40)) +
+  theme(legend.position="none")
+
+ 
+Learn_Volcanoplot
+
+
+
+Mem_Volcanoplot <- ggplot(na.omit(Memgene_list), aes(y=-log10(padj), x=log2FoldChange, color=log10(baseMean), label=gname)) +
+  geom_hline(yintercept=-log10(0.05), color='grey70')+
+  geom_vline(xintercept= -1, color='grey70')+
+  geom_vline(xintercept= 1, color='grey70')+
+  geom_point(size=1.3) +
+  geom_text_repel(data = Memgene_list[Learngene_list$FBgn %in% place.g,], show.legend = FALSE,  fontface='italic', color="grey30", ylim=35, size =3, force = 3) +
+  
+  ylab(expression("-log"[10]*"(P"[adj]*")")) +
+  xlab(expression("log"[2]*"(FC)"))+
+  xlim(c(-4.5,4.5)) +
+  ylim(c(0,75)) +
+   my_theme +
+  scale_color_gradientn(breaks = c(2:5), labels = 10^seq(2,5), name = "Mean\nExpression",colours = rainbow_hcl(8, start = 300, end = 40)) +
+  theme(axis.title.y=element_blank())
+                    
+Mem_Volcanoplot
+
+ggsave(Learn_Volcanoplot, filename="../Plots/Learn_Volcanoplot.pdf", width=6.5, height=3)
+ggsave(Mem_Volcanoplot, filename="../Plots/Mem_Volcanoplot.pdf", width=6.5, height=3)
+
+
+allplot <- plot_grid(LearnMAplot,MemMAplot, Learn_Volcanoplot, Mem_Volcanoplot,nrow=2,labels = c('a.', 'b.', 'c.','d.'), rel_widths = c(1,1.3,1,1.3), label_size = 10)
+#allplot
+
+ggsave(allplot, file="../Plots/ExprPatterns_all.pdf",width=6.5,height=5)
+
+
+Learngene_list[Learngene_list$FBgn %in% place.g,]
+Memgene_list[Learngene_list$FBgn %in% place.g,]
+
+```
+

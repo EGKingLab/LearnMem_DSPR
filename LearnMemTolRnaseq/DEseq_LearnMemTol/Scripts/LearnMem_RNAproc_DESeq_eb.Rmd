@@ -1,0 +1,179 @@
+---
+title: "LearnMem_RNAproc_DESeq"
+author: "Patricka Williams-Simon"
+date: "8/13/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(DESeq2)
+library(dplyr)
+library(stringr)
+library(sva)
+library(ggplot2)
+library(RColorBrewer)
+
+```
+
+
+# Process gene count matrix and phenotype dataset
+
+```{r}
+
+#load datset
+LMgenes <- read.csv("../Data/LearnMemBallgown/ballgown_eb/LMgene_count_matrix_eb.csv", row.names="gene_id")
+
+phenData <- read.csv("../Data/sample_description.csv", stringsAsFactors = FALSE)
+
+#Make an object with only LearnMem data and add id column 
+LMpheno <- phenData %>% filter(treatment %in% c("LL", "LH", "ML", "MH" ))
+
+names(LMpheno)[1]<-"ids"
+LMpheno <- LMpheno %>%
+  select(ids,treatment,replicate)
+
+rownames(LMpheno) <- LMpheno[,1]
+LMpheno[,1] <- NULL
+
+##Add batch column
+LMpheno$batch <- LMpheno$treatment
+
+LMpheno$batch[LMpheno$treatment=='LL'] <- "A"
+LMpheno$batch[LMpheno$treatment=='LH'] <- "A"
+LMpheno$batch[LMpheno$treatment=='ML'] <- "B"
+LMpheno$batch[LMpheno$treatment=='MH'] <- "B"
+
+# Check all sample IDs in colData are also in genecount and match their orders
+all(rownames(LMpheno) %in% colnames(LMgenes))
+LMgenes <- LMgenes[, rownames(LMpheno)]
+all(rownames(LMpheno) == colnames(LMgenes))
+
+LMpheno <- as.matrix(LMpheno)
+
+save(LMpheno, file="../Data/LMRNAproc_data_eb.rda")
+
+```
+
+
+# Control for batch effects
+
+```{r}
+#estimating batch effects
+LMdds <- DESeqDataSetFromMatrix(countData = LMgenes,
+                              colData = LMpheno, 
+                              design = ~ treatment)
+
+
+LMdds_sva <- estimateSizeFactors(LMdds)
+LMdat_sva <- counts(LMdds_sva, normalized=TRUE)
+LMcc_c <- rowSums(LMdat_sva)
+
+
+#remove all genes with 0s for all samples
+LMdat_sva <- LMdat_sva[which(LMcc_c>0),]
+
+#check dataset to see if there are any NAs
+#length(which(is.na(Memgene_list$log2FoldChange)))
+#length(which(is.na(Memgene_list$padj)))
+
+#look at specific columns
+#testm <- Memgene_list[which(is.na(Memgene_list$padj)),]
+#testm[1:5,]
+
+
+
+LMpheno <- as.data.frame(LMpheno)
+
+#fit model
+LMmod <- model.matrix(~ as.factor(treatment),
+                              data=LMpheno)
+
+#intercept
+LMmod0 <- model.matrix(~1, data=LMpheno) 
+
+
+# calculate number of surrogate variables
+LMn_sv <- num.sv(LMdat_sva, LMmod, method = "be")
+
+print(c("Calculated number of significant SVs = ", LMn_sv))
+
+
+LMsvobj <- svaseq(LMdat_sva, LMmod, LMmod0, n.sv=LMn_sv)
+
+
+#add the SV values to the pheno dataset
+LMpheno$SV1 <- LMsvobj$sv[,1]
+
+
+LMpheno <- as.data.frame(LMpheno)
+
+# countData colnames() must be identical to colData rownames()
+all(rownames(LMpheno) %in% colnames(LMgenes))
+countdata <- LMgenes[, rownames(LMpheno)]
+all(rownames(LMpheno) == colnames(LMgenes))
+
+```
+
+
+#Model with surrogate variables, treatment and replicate
+
+
+```{r}
+
+# DESeqDataSet for all variables,
+
+LM_dds_ttSS <- DESeqDataSetFromMatrix(countData = LMgenes, 
+                                   colData = LMpheno, 
+                                   design = ~ SV1 + treatment)
+
+LMsv_dds_deseq <- DESeq(LM_dds_ttSS) 
+
+#look at one gene
+d <- plotCounts(LMsv_dds_deseq, gene="FBgn0000479", intgroup=c("treatment"), 
+                returnData=TRUE)
+ggplot(d, aes(x=treatment, y=count))+
+  geom_point()
+
+#pairwise comparison
+LearnresSV.default <- results(LMsv_dds_deseq, contrast =c("treatment", "LH", "LL"))
+MemresSV.default <- results(LMsv_dds_deseq, contrast =c("treatment", "MH", "ML"))
+
+LearnresSV <- lfcShrink(dds=LMsv_dds_deseq, contrast =c("treatment", "LH", "LL"))
+MemresSV <- lfcShrink(dds=LMsv_dds_deseq, contrast =c("treatment", "MH", "ML"))
+
+all.equal(LearnresSV$pvalue, LearnresSV.default$pvalue)
+
+
+LearnresSVorder <- LearnresSV [order(LearnresSV$padj), ]
+MemresSVorder <- MemresSV[order(MemresSV$padj), ]
+
+save(LearnresSVorder, file = "../Data/LearnresSVOrder.Rda")
+save(MemresSVorder, file = "../Data/MemresSVOrder.Rda")
+
+
+## Merge with normalized count data
+Learnsv_res_dds_table <- merge(as.data.frame(LearnresSV), 
+                       as.data.frame(counts(LMsv_dds_deseq, normalized=TRUE)), 
+                       by="row.names", sort=FALSE)
+names(Learnsv_res_dds_table)[1] <- "Gene"
+
+#Mem
+Memsv_res_dds_table <- merge(as.data.frame(MemresSV), 
+                       as.data.frame(counts(LMsv_dds_deseq, normalized=TRUE)), 
+                       by="row.names", sort=FALSE)
+names(Memsv_res_dds_table)[1] <- "Gene"
+
+
+save(Memsv_res_dds_table, file = "../Data/MemDEseqSVA_resOrdered_padj.Rda")
+
+write.csv(Learnsv_res_dds_table, 
+          "../Data/LearnDEseqSVA_resOrdered_padj.csv", row.names=TRUE)
+
+write.csv(Memsv_res_dds_table, 
+          "../Data/MemDEseqSVA_resOrdered_padj.csv", row.names=TRUE)
+
+
+
+```

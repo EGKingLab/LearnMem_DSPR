@@ -1,0 +1,106 @@
+---
+title: "h2_rg"
+author: "EGK & PW-S"
+date: "1/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(nlme)
+library(tidyverse)
+source("../../Functions/h2_functs.R")
+
+```
+
+
+## Phenotypic data
+
+```{r}
+
+rawdLM <- read.table("../../LearnMemTolPheno/ProcessedData/LearnMem_processed.txt",sep="\t", header=TRUE, stringsAsFactors = FALSE)
+str(rawdLM)
+
+rawdTT <- read.table("../../LearnMemTolPheno/ProcessedData/ThermalTol_processed.txt",sep="\t", header=TRUE, stringsAsFactors = FALSE)
+str(rawdTT)
+
+rawdLM <- rawdLM[,c('patRIL','Learning','Memory')]
+rawdLM <- rawdLM %>% mutate(LearnNorm = quant.norm(Learning),
+                            MemoryNorm = quant.norm(Memory))
+
+```
+
+## Broad sense heritability
+
+
+```{r}
+
+learn.h2 <- h2.lme(geno=as.factor(rawdLM$patRIL), pheno=rawdLM$LearnNorm)
+#h2.lme(geno=as.factor(rawdLM$patRIL), pheno=rawdLM$Learning)
+
+geno <- as.factor(rawdLM$patRIL)
+pheno <- rawdLM$LearnNorm
+
+afit<-lme(pheno ~ 1 , random= ~1 | geno, method="ML")
+afit.n <- lm(pheno ~ 1)
+anova.lme(afit.n, afit)
+#check
+x2val <- -2*logLik(afit.n, REML=FALSE) + 2* logLik(afit, REML=FALSE)
+pchisq(x2val, df=1, lower.tail=F, log.p = TRUE)
+
+
+#MEMORY
+mem.h2 <- h2.lme(geno=as.factor(rawdLM$patRIL), pheno=rawdLM$MemoryNorm)
+#h2.lme(geno=as.factor(rawdLM$patRIL), pheno=rawdLM$Memory)
+
+geno <- as.factor(rawdLM$patRIL)
+pheno <- rawdLM$MemoryNorm
+afit<-lme(pheno ~ 1 , random= ~1 | geno, method='ML')
+afit.n <- lm(pheno ~ 1)
+anova.lme(afit.n, afit)
+
+x2val <- -2*logLik(afit.n, REML=FALSE) + 2* logLik(afit, REML=FALSE)
+
+pchisq(x2val, df=1, lower.tail=F, log.p=TRUE)
+
+learn.jk <- jk.h2.lme(geno=as.factor(rawdLM$patRIL), pheno=rawdLM$LearnNorm)
+mean(learn.jk, na.rm=TRUE)
+sd(learn.jk, na.rm=TRUE)
+nn <- length(learn.jk[is.na(learn.jk)==FALSE])
+tval <- qt(0.025, nn-1, lower.tail=FALSE)
+mean(learn.jk, na.rm=TRUE) + tval*sd(learn.jk, na.rm=TRUE)/sqrt(nn)
+mean(learn.jk, na.rm=TRUE) - tval*sd(learn.jk, na.rm=TRUE)/sqrt(nn)
+
+
+mem.jk <- jk.h2.lme(geno=as.factor(rawdLM$patRIL), pheno=rawdLM$MemoryNorm)
+mean(mem.jk, na.rm=TRUE)
+sd(mem.jk, na.rm=TRUE)
+length(mem.jk[is.na(mem.jk)])
+nn <- length(mem.jk[is.na(mem.jk)==FALSE])
+tval <- qt(0.025, nn-1, lower.tail=FALSE)
+mean(mem.jk, na.rm=TRUE) + tval*sd(mem.jk, na.rm=TRUE)/sqrt(nn)
+mean(mem.jk, na.rm=TRUE) - tval*sd(mem.jk, na.rm=TRUE)/sqrt(nn)
+
+```
+
+## Genetic correlation
+
+```{r}
+
+phen.l <- rawdLM[,c('patRIL','LearnNorm','MemoryNorm')] %>% gather(phenotype,value,-patRIL)
+
+rg.lme(phenoval=phen.l$value, phenotype=phen.l$phenotype, geno=phen.l$patRIL)
+
+psrg <- jk.rg.lme(phenoval=phen.l$value, phenotype=phen.l$phenotype, geno=phen.l$patRIL)
+
+mean(psrg,na.rm=TRUE)
+nn <- length(psrg[is.na(psrg)==FALSE])
+tval <- qt(0.025, nn-1, lower.tail=FALSE)
+mean(psrg, na.rm=TRUE) + tval*sd(psrg, na.rm=TRUE)/sqrt(nn)
+mean(psrg, na.rm=TRUE) - tval*sd(psrg, na.rm=TRUE)/sqrt(nn)
+
+length(psrg[is.na(psrg)])
+```
+
+

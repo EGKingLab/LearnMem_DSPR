@@ -1,0 +1,217 @@
+---
+title: "Processing_Phenotype_Data"
+author: "Patricka Williams-Simon"
+date: "7/13/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readxl)
+library(ggplot2)
+library(DSPRqtl)
+library(DSPRqtlDataA)
+library(tidyverse)
+```
+
+## Read in LearnMem processed raw data and check 
+
+```{r}
+rawdLM <- read.table("../ProcessedData/LearnMem_processed.txt",sep="\t", header=TRUE, stringsAsFactors = FALSE)
+
+
+str(rawdLM)
+rawdLM[1:5]
+
+```
+
+## Read in ThermTol processed raw data and check
+```{r}
+rawdTT <- read.table("../ProcessedData/ThermalTol_processed.txt",sep="\t", header=TRUE, stringsAsFactors = FALSE)
+
+
+str(rawdTT)
+rawdTT[1:5]
+
+
+```
+
+## Find means and SEMs for all three traits
+
+```{r}
+L_MDATA <- rawdLM %>% 
+  group_by(patRIL) %>% 
+  summarise(Learning_Mean = mean(Learning),
+            Learning_SEM = sd(Learning)/sqrt(length(Learning)),
+            Memory_Mean = mean(Memory),
+            Memory_SEM = sd(Memory)/sqrt(length(Memory)),
+            N = length(Memory))
+
+
+
+
+T_TDATA <- rawdTT %>% 
+  group_by(patRIL) %>% 
+  summarise(Incapacitation_Mean = mean(incapacitation),
+            Incapacitation_SEM = sd(incapacitation)/sqrt(length(incapacitation)),
+            N = length(incapacitation))
+```
+
+
+#Find Percentile for each RIL
+
+```{r}
+
+L_MDATA$Percentile_Learning <- ecdf(L_MDATA$Learning_Mean)(L_MDATA$Learning_Mean)
+
+L_MDATA$Percentile_Memory <- ecdf(L_MDATA$Memory_Mean)(L_MDATA$Memory_Mean)
+
+T_TDATA$Percentile_ThermTol<- ecdf(T_TDATA$Incapacitation_Mean)(T_TDATA$Incapacitation_Mean)
+
+```
+
+## Visualize data
+
+```{r}
+#Make histogram LearnMem
+Learnhisto <- ggplot(L_MDATA, aes(x = Learning_Mean)) +
+  geom_histogram()
+
+Memhisto <- ggplot(L_MDATA, aes(x = Memory_Mean)) +
+  geom_histogram()
+
+ThermTolhisto <- ggplot(T_TDATA, aes(x = Incapacitation_Mean)) +
+  geom_histogram()
+
+
+#View graph
+Learnhisto
+
+Memhisto
+
+ThermTolhisto
+
+```
+
+## Check dataset
+
+```{r}
+#Identify minimum mean (find really low learning point identified in histograms)
+L_MDATA[which.min(L_MDATA$Learning_Mean),]
+L_MDATA[which.min(L_MDATA$Memory_Mean),]
+T_TDATA[which.min(T_TDATA$Incapacitation_Mean),]
+
+
+#Look at indivial Learning PIs for RILs with lowest means
+rawdLM[rawdLM$patRIL==12114,'Learning']
+rawdLM[rawdLM$patRIL==11189,'Memory']
+
+#Look at indivial Incapacitation times for RIL with lowest mean
+rawdTT[rawdTT$patRIL==11459,'incapacitation']
+
+
+#Identify maximum means.
+L_MDATA[which.max(L_MDATA$Learning_Mean),]
+L_MDATA[which.max(L_MDATA$Memory_Mean),]
+T_TDATA[which.max(T_TDATA$Incapacitation_Mean),]
+
+
+#Sort and save from decreasing to increasing means 
+LearnDATA_sort <- L_MDATA[order(L_MDATA$Learning_Mean),]
+MemDATA_sort <- L_MDATA[order(L_MDATA$Memory_Mean),]
+ThermTolDATA_sort <- T_TDATA[order(T_TDATA$Incapacitation_Mean),]
+
+#save sorted dataset
+#save(LearnDATA_sort, file="../ProcessedData/LearnDATA_sort.rda")
+#save(MemDATA_sort, file="../ProcessedData/MemDATA_sort.rda")
+#save(ThermTolDATA_sort, file="../ProcessedData/ThermTolDATA_sort.rda")
+
+#load files, if necessary
+#load(file ="../ProcessedData/LearnDATA_sort.rda")
+#load(file ="../Processed/Data/MemDATA_sort.rda")
+#load(file ="../ProcessedData/ThermTolDATA_sort.rda")
+
+#Identify RILs in the low cohort
+LearnDATA_sort[11:20,]
+MemDATA_sort[1:10,]
+ThermTolDATA_sort[1:20,]
+
+
+#Identify RILs in the mid cohort
+LearnDATA_sort[349:374,]
+MemDATA_sort[349:374,]
+ThermTolDATA_sort[349:374,]
+
+#Identify RILs in the high cohort
+LearnDATA_sort[731:741,]
+MemDATA_sort[731:741,]
+ThermTolDATA_sort[721:730,]
+
+```
+
+
+#Identify where RILs used for RNAseq are in the final Dataset
+
+```{r}
+#Learning Low
+LearnRNAseqLow <- L_MDATA %>% filter(patRIL %in% c("12044", "12285", "12138", "11189", "12022", "12084", "12324"))
+
+#save(LearnRNAseqLow, file="../ProcessedData/LearnRNAseqLow.rda")
+
+#Learning High
+LearnRNAseqHigh <- L_MDATA %>% filter(patRIL %in% c("11065", "12359", "11146", "11144", "11006", "11122", "11023"))
+
+#save(LearnRNAseqHigh, file="../ProcessedData/LearnRNAseqHigh.rda")
+
+#Memory Low
+MemRNAseqLow <- L_MDATA %>% filter(patRIL %in% c("12030", "12383", "12285", "11189", "11038", "11133", "11186"))
+
+#save(MemRNAseqLow, file="../ProcessedData/MemRNAseqLow.rda")
+
+#Memory High
+MemRNAseqHigh <- L_MDATA %>% filter(patRIL %in% c("12018", "12039", "12074", "11184", "11122", "12071", "11023"))
+
+#save(MemRNAseqHigh, file="../ProcessedData/MemRNAseqHigh.rda")
+
+
+#Thermal Tolerance Low
+ThermRNAseqLow <- T_TDATA %>% filter(patRIL %in% c("12047", "12290", "12042", "11106", "12060", "11042", "11132"))
+
+#save(ThermRNAseqLow, file="../ProcessedData/ThermRNAseqLow.rda")
+
+#Thermal Tolerance High
+ThermRNAseqHigh <- T_TDATA %>% filter(patRIL %in% c("12069", "12062", "11024", "11163", "11023", "11043", "11067"))
+
+#save(ThermRNAseqHigh, file="../ProcessedData/ThermRNAseqHigh.rda")
+
+```
+
+##Transform data set (only if necessary). There are several methods used to transform data, choose the best fit.
+
+```{r}
+
+#log transformation, log10 transformation, arcsign transformation 
+
+
+#sqaure root transformation
+T_TDATA$Tolsqrtvariable<-sqrt(T_TDATA$Incapacitation_Mean)
+
+#after transformation always visualize data
+ggplot(T_TDATA, aes(x = T_TDATA$Tolsqrtvariable)) +
+  geom_histogram()
+
+
+#save new dataset
+save(T_TDATA, file="../ProcessedData/T_TDATA.rda")
+
+
+#power transformation
+
+L_MDATA$LearnPowerTrans <- L_MDATA$Learning_Mean^3
+
+ggplot(L_MDATA, aes(x = LearnPowerTrans)) +
+  geom_histogram()
+
+save(L_MDATA, file="../ProcessedData/L_MDATA.rda")
+
+```
+

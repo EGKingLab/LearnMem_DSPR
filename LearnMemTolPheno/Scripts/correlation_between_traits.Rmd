@@ -1,0 +1,70 @@
+---
+title: "correlation_between_traits"
+author: "Patricka Williams-Simon"
+date: "7/19/2018"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+library(readxl)
+library(ggplot2)
+library(DSPRqtl)
+library(DSPRqtlDataA)
+library(tidyverse)
+library(cowplot)
+source("../../Functions/ggplot_theme.R")
+```
+
+##load flies
+
+```{r}
+load(file="../ProcessedData/L_MDATA.rda")
+load(file="../ProcessedData/T_TDATA.rda")
+
+```
+
+##merge filies 
+
+```{r}
+All_3_Traits_Data <- merge(L_MDATA, T_TDATA, by='patRIL')
+
+```
+
+##Find correlation between traits (Pearson's Correlation Test)
+
+```{r}
+cor.test(All_3_Traits_Data$Learning_Mean,All_3_Traits_Data$Memory_Mean)
+
+cor.test(All_3_Traits_Data$Learning_Mean,All_3_Traits_Data$Incapacitation_Mean)
+
+```
+
+#visulalize the data using scatter plots
+
+```{r}
+
+#making scatter plots
+line_color<-'grey30'
+
+cor_Learn_Mem_plot <- ggplot (All_3_Traits_Data, aes(x = Learning_Mean, y = Memory_Mean))+
+  geom_segment(aes(x=Learning_Mean, xend=Learning_Mean, y=Memory_Mean-Memory_SEM, yend=Memory_Mean+Memory_SEM), color=LM_cols[2], alpha=1/2)+
+  geom_segment(aes(x=Learning_Mean-Learning_SEM, xend=Learning_Mean + Learning_SEM, y=Memory_Mean, yend=Memory_Mean), color=LM_cols[1], alpha=1/2)+
+  geom_point(alpha=1/2, size=1.5) +
+  geom_smooth(method = "lm", color = line_color, se = FALSE) +
+    xlab("Learning") +
+  ylab("Memory") +
+  my_theme
+
+
+#to view plot
+cor_Learn_Mem_plot
+
+save(cor_Learn_Mem_plot, file="../Plots/Learn_Mem_Cor.rda")
+
+#To make figures into files, assign to an object and use ggsave
+
+ggsave(cor_Learn_Mem_plot, file="../Plots/Learn_Mem_Cor.pdf", width=3, height=3)
+
+```
+

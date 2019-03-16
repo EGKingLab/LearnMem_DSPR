@@ -1,0 +1,199 @@
+---
+title: "Effects Plot"
+author: "EGK"
+date: "2/14/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DSPRqtlDataA)
+library(DSPRqtl)
+library(tidyverse)
+library(cowplot)
+source(file="../../Functions/ggplot_theme.R")
+
+```
+
+```{r}
+load(file="../../LearnMemTolPheno/ProcessedData/L_MDATA.rda")
+
+load(file ="../ProcessedData/Peaks_wCIs.rda")
+
+rrs <- read.table(file="../../LearnMemTolRnaseq/DEseq_LearnMemTol/Data/RILs_in_pools.txt", sep="\t", stringsAsFactors = FALSE, header=TRUE)
+
+load(file="../ProcessedData/Mem_genes_under_peak.rda")
+load(file="../ProcessedData/Learn_genes_under_peak.rda")
+
+L.plot <- L_MDATA[,c("patRIL","LearnPowerTrans","Memory_Mean")]
+
+share.set <- cbind(c(1,2,5,7,8),c(1,2,4,5,6))
+
+plot.list <- vector(mode="list", length=nrow(share.set))
+qnames <- c("Q4", "Q5","Q9","Q11","Q12") 
+
+for(ii in 1:nrow(share.set))
+{
+L.plot.s <- L.plot
+ll <- share.set[ii,1]
+mm <- share.set[ii,2]
+
+cc.ll <- ci.peak[[1]][ll,]
+cc.mm <- ci.peak[[2]][mm,]
+
+objname <- paste("A_",cc.ll$chr,"_",format(cc.ll$Ppos, sci=FALSE), sep="")
+data(list=objname)
+genos <- get(objname)
+genos <- genos[,1:9]
+hard <- tibble("patRIL" = genos$ril, "Haplotype" = paste("A",unlist(apply(genos[2:9], 1, which.max)),sep=""))
+hard$patRIL <- as.character(hard$patRIL)
+L.plot.s$patRIL <- as.character(L.plot.s$patRIL)
+L.plot.s <- inner_join(L.plot.s, hard)
+
+effs.dat <- tibble("Haplotype"= paste("A",seq(1:8),sep=""), 
+                    "eLearn" = as.numeric(cc.ll[1,19:26]),
+                   "LearnSE"= as.numeric(cc.ll[1,27:34]),
+                   "LearnN"=as.numeric(cc.ll[1,35:42]),
+                   "eMem" = as.numeric(cc.mm[1,19:26]),
+                   "MemSE"= as.numeric(cc.mm[1,27:34]),
+                   "MemN"=as.numeric(cc.mm[1,35:42]))
+
+effs.dat <- effs.dat[which(effs.dat$LearnN > 3 & effs.dat$MemN >3),]
+
+L.plot.s$pool <- rep("A", nrow(L.plot.s))
+L.plot.s$pool[which(L.plot.s$patRIL %in% rrs[rrs$Pool=="LH"| rrs$Pool=="MH","patRIL"])] <-"B"
+L.plot.s$pool[which(L.plot.s$patRIL %in% rrs[rrs$Pool=="LL"| rrs$Pool=="ML","patRIL"])] <- "C"
+
+L.plot.pool <- subset(L.plot.s, pool != "A")
+
+
+plot.list[[ii]] <- ggplot(L.plot.s, aes(x=LearnPowerTrans,y=Memory_Mean, color=Haplotype)) +
+  geom_point(alpha = 1/3, size=1) +
+  geom_point(data = effs.dat, aes(x=eLearn,y=eMem,fill=Haplotype), size=3,pch=21, color="black") +
+  geom_segment(data = effs.dat, aes(x=eLearn-LearnSE, xend=eLearn + LearnSE, y=eMem, yend=eMem), color = 'black') +
+  geom_segment(data = effs.dat, aes(x=eLearn, xend=eLearn, y=eMem-MemSE, yend=eMem+MemSE), color = 'black') +
+  #geom_point(data= L.plot.s.pool, aes(x=LearnPowerTrans, y=Memory_Mean, fill=Haplotype, shape=pool), color="black")+
+  scale_shape_manual(values=c(24,25))+
+  ylab("Memory") +
+  xlab(expression(Learning^3)) +
+  annotate("text", label=qnames[ii], x= 0.1, y=0.8, fontface=2) +
+  theme(legend.position="none") +
+  my_theme
+  
+}
+
+pgene <- ggplot(L.plot.s, aes(x=LearnPowerTrans,y=Memory_Mean, color=Haplotype)) +
+  geom_point(alpha = 1/3, size=1, show.legend = FALSE) +
+  geom_point(data = effs.dat, aes(x=eLearn,y=eMem,fill=Haplotype), size=3,pch=21, color="black") +
+  geom_segment(data = effs.dat, aes(x=eLearn-LearnSE, xend=eLearn + LearnSE, y=eMem, yend=eMem), color = 'black') +
+  geom_segment(data = effs.dat, aes(x=eLearn, xend=eLearn, y=eMem-MemSE, yend=eMem+MemSE), color = 'black') +
+  #geom_point(data= L.plot.pool, aes(x=LearnPowerTrans, y=Memory_Mean, fill=Haplotype, shape=pool), color="black")+
+  scale_shape_manual(values=c(24,25))+
+  ylab("Memory") +
+  xlab(expression(Learning^3)) +
+  guides(color = guide_legend(ncol = 2)) +
+  theme(legend.margin=margin(t=1,r=0,b=0,l=0, unit = 'cm')) +
+  my_theme
+  
+pgene
+leg.set <- g_legend(pgene)
+
+plot.list[[6]] <- leg.set
+
+pall <- plot_grid(plotlist=plot.list, nrow=2, ncol=3,labels = c("a.","b.","c.","d.","e."), align="hv", axis="tl", label_size=10)
+pall
+
+ggsave(pall, file="../Plots/EffectPlots_shared.pdf", width=8, height=5)
+
+```
+
+## Plot with previous expression data
+```{r}
+load(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/Final_EXPR_MAT.rda")
+
+ww<- which(L_MDATA$patRIL %in% rownames(qn.mat))
+wwe<- which(rownames(qn.mat) %in% L_MDATA$patRIL)
+
+L.sub <- L_MDATA[ww,]
+qn.mat <- qn.mat[wwe,]
+
+all.equal(as.numeric(row.names(qn.mat)), L.sub$patRIL)
+
+cgn<-read.table(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/fbgn_fbtr_fbpp_fb_2012_02.tsv",header=FALSE,stringsAsFactors=FALSE,sep="\t",fill=TRUE)
+load(file='/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/probes/CDS/completeCDS.rda')
+ss<-merge(cgn,bl, by.x="V2",by.y="FBtr")
+ww.t <- which(ss$CGid %in% colnames(qn.mat))
+ww.g <- which(ss$CGgn %in% colnames(qn.mat))
+decode.n <- ss[,c('V1','CGid','CGgn')]
+decode.n$ID <- NA
+decode.n$ID[ww.t]<- ss$CGid[ww.t]
+decode.n$ID[ww.g]<- ss$CGgn[ww.g]
+decode.n <- decode.n[,c('V1','ID')]
+decode.n <- unique(decode.n, MARGIN=1)
+colnames(decode.n) <- c("FBgn","ID")
+
+#files from old proj
+load(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/goodpeaksinfo_matrix.rda")
+load(file="/home/kingeg/Archived/wfitchNOV2015/Fheads_eQTLs/eQTLs/AbyB/Analysis/NewRMA/QTLmapping/means_wcorrected.rda")
+
+effects <- effects[pinfo$cis==TRUE,]
+
+pinfo <- pinfo[pinfo$cis==TRUE,]
+
+effects <- merge(effects, decode.n, by='ID',sort=FALSE, all.x=TRUE)
+
+
+
+
+```
+
+```{r}
+
+#look at individual peak data graphically
+cg.foc <- "CG6822"
+q.foc <- qn.mat[,cg.foc]
+compdat <- tibble("patRIL"=as.character(L.sub$patRIL), "Expression"= q.foc, "Learning" = L.sub$LearnPowerTrans, "Memory"= L.sub$Memory_Mean)
+
+ll <- 7
+#mm <- 5 
+cc.ll <- ci.peak[[1]][ll,]
+#cc.mm <- ci.peak[[2]][mm,]
+
+ll.sub <- learn.list[[ll]]
+#mm.sub <- Mem.list[[mm]]
+
+objname <- paste("A_",cc.ll$chr,"_",format(cc.ll$Ppos, sci=FALSE), sep="")
+data(list=objname)
+genos <- get(objname)
+genos <- genos[,1:9]
+hard <- tibble("patRIL" = genos$ril, "Haplotype" = paste("A",unlist(apply(genos[2:8], 1, which.max)),sep=""))
+compdat <- inner_join(compdat, hard)
+
+compdat$pool <- rep("A", nrow(compdat))
+compdat$pool[which(compdat$patRIL %in% rrs[rrs$Pool=="LH","patRIL"])] <-"B"
+compdat$pool[which(compdat$patRIL %in% rrs[rrs$Pool=="LL","patRIL"])] <- "C"
+
+
+eff.sub <- effects[effects$ID == cg.foc,]
+
+effs.dat <- tibble("Haplotype"= paste("A",seq(1:8),sep=""), 
+                   "eEx" = as.numeric(eff.sub[1,2:9]),
+                   "ExSE" = as.numeric(eff.sub[1,18:25]),
+                   "ExN" = as.numeric(eff.sub[1,34:41]),
+                   "ePhen" = as.numeric(cc.ll[1,19:26]),
+                   "PhenSE"= as.numeric(cc.ll[1,27:34]),
+                   "PhenN"=as.numeric(cc.ll[1,35:42]))
+
+effs.dat <- effs.dat[which(effs.dat$ExN > 3 & effs.dat$PhenN >3),]
+
+compdat.pool <- subset(compdat, pool != "A")
+
+ggplot(compdat, aes(x=Learning,y=Expression, color=Haplotype)) +
+  geom_point(alpha = 1/3) +
+  geom_point(data = effs.dat, aes(x=ePhen,y=eEx,fill=Haplotype), size=3,pch=21, color="black") +
+  geom_segment(data = effs.dat, aes(x=ePhen-PhenSE, xend=ePhen + PhenSE, y=eEx, yend=eEx), color = 'black') +
+  geom_segment(data = effs.dat, aes(x=ePhen, xend=ePhen, y=eEx-ExSE, yend=eEx+ExSE), color = 'black') +
+  geom_point(data= compdat.pool, aes(x=Learning, y=Expression, color=Haplotype, shape=pool, size=2))
+
+  
+```
