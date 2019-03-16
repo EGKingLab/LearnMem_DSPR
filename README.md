@@ -51,16 +51,19 @@ QTL mapping analyses are in LearnMemTolQTL
 1.Set_up_commands_masterpipeline.R is the master script that outputs 8 separate scripts for processing RNAseq data. It sets up scripts to run the RNA-Seq data on a cluster using SLURM. It will require adaptation for your own system and file paths.
 
 Output sripts are named: 
-S01_Trim_LearnMemRNA.txt - trims data
-S02_QC_LearnMemRNA.txt - performs quality control
-S03_Align_LearnMemRNA.txt - aligns data to the fly genome 
-S04_SamtoBam_LearnMemRNA.txt - converts file from .sam to .bam
-SO5_MergeBam_LearnMemRNA.txt - merges bam files
-SO6_Assemble_LearnmemRNA.txt - assembles data
 
-S08_Abundances_LearnMemRNA_eb.txt - finds abundances (Stringtie shorter version. This step only identifies genes that are already known. No novel genes are detected.)
---or--
-S08_Abundances_LearnMemRNA.txt - finds abundances including novel transcripts
+ - S01_Trim_LearnMemRNA.txt: trims data
+ - S02_QC_LearnMemRNA.txt: performs quality control
+ - S03_Align_LearnMemRNA.txt: aligns data to the fly genome 
+ - S04_SamtoBam_LearnMemRNA.txt: converts file from .sam to .bam
+ - SO5_MergeBam_LearnMemRNA.txt: merges bam files
+ - SO6_Assemble_LearnmemRNA.txt: assembles data
+
+ - S08_Abundances_LearnMemRNA_eb.txt - finds abundances (Stringtie shorter version. This step only identifies genes that are already known. No novel genes are detected.)
+
+or
+
+ - S08_Abundances_LearnMemRNA.txt - finds abundances including novel transcripts
 
 
 ### Differential Expression Analysis is in LearnMemTolRnaseq/DEseq_LearnMemTol
