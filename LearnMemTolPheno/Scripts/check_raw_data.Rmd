@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(ggplot2)
 library(cowplot)
+library(lubridate)
+library(nlme)
 ```
 
 ## Read in Data
@@ -24,11 +26,26 @@ load(file="../ProcessedData/Learn_raw.rda")
 #learning and memory data processed through HeatCalc
 LM_proc <- read.table(file="../ProcessedData/HeatProc_Learn.txt", sep="\t", header=TRUE, stringsAsFactors = FALSE)
 
+A_proc <- read.table(file="../ProcessedData/HeatProc_Activity.txt", sep="\t", header=TRUE, stringsAsFactors = FALSE)
+
+LM_proc$Activity_score <- A_proc$Pre
 
 #raw thermal tolerance data
 #Named ThermTol
 load(file="../ProcessedData/Incapacitation.rda")
 
+
+#dates
+load(file="../ProcessedData/Learn_Dates.rda") #named set
+dd.g <- table(set[,c('patRIL','group')])
+#5-2 is duplicate, 6 -2 is just 6
+set <- set[set$group!="5-2",]
+set[set$group=="6- 2","group"] <- "6"
+set$group <- as.numeric(set$group)
+set$year <- year(set$date)
+set$month <- month(set$date)
+set$wday <- wday(set$date)
+set$hour <- hour(set$date)
 ```
 
 ## Assign chamber and group number to processed data
@@ -157,9 +174,12 @@ all.dat$flag[pB] <- 'BothFail'
 #merge with processed data
 total.set <- merge(all.dat,LM_procg,by=c('patRIL','chamber','group'),all=TRUE)
 
+#temp<- total.set
 temp <- subset(total.set, flag=='LearnFail')
 temp <- temp[-which(is.na(temp$actual.Temp.test.A)),]
 temp <- temp[-which(is.na(temp$Learning)),]
+
+
 
 temp1 <- subset(total.set, flag=='ThermFail')
 temp1 <- temp1[-which(is.na(temp1$diff.train.A)),]
@@ -170,6 +190,9 @@ pA <- which(total.set$ThermAct==0 & total.set$Memory== -1)
 total.set$dflag <- rep('none', nrow(total.set))
 total.set$dflag[pA] <- 'dead'
 
+temp <- subset(total.set, dflag=='dead' & flag=='none')
+max(table(temp$patRIL))
+table(temp$file.x)
 ```
 
 Here we use the temperature data to identify problem chambers. For thermal tolerance, if the average temperature over the assay is less than `r lowtem`, we flagged it as problematic. For learning and memory, if the absolute value of the average temperature was greater than `r topdif`, we flagged it as problematic. There are very few chambers flagged as problematic for learning that are not also problematic for thermal tolerance (`r nrow(temp)` records). There are more that are flagged for thermal tolerance but not for learning (`r nrow(temp1)` records). This could be occuring when the punishment side is NOT the side with the problem.   
@@ -307,6 +330,61 @@ Most of the cases where there is no activity in thermal tolerance but there is a
 Here we filter out bad records. We have filtered out any that fail the thermal tolerance criteria for thermal tolerance and any that fail FOR ANY REASON for the learning data. The numbers of RILs we remain with are shown here.
 
 ```{r  warning = FALSE, message = FALSE}
+
+total.set.date <- merge(total.set, set, by=c('patRIL','group'))
+proc.set <- which(is.na(total.set.date$Learning))
+total.set.date <- total.set.date[-proc.set,]
+nrow(total.set.date)
+tempf <- subset(total.set.date, flag != 'none')
+nrow(tempf)
+
+tempa <- subset(total.set.date, dflag != 'none')
+nrow(tempa)
+
+total.set.date.noflag <- subset(total.set.date, flag=='none' & dflag=='none')
+
+hist(tempa$month,breaks=12)
+hist(tempf$month,breaks=12)
+hist(total.set.date$month,breaks=12)
+
+hist(tempa$wday,breaks=7)
+hist(tempf$wday,breaks=7)
+hist(total.set.date$wday,breaks=7)
+
+hist(tempa$year,breaks=4)
+hist(tempf$year,breaks=4)
+hist(total.set.date$year,breaks=4)
+
+hist(tempa$hour,breaks=12)
+hist(tempf$hour,breaks=12)
+hist(total.set.date$hour,breaks=12)
+
+table(tempf$patRIL)
+table(tempa$patRIL)
+
+total.set.date.noflag$patRILF <- as.factor(total.set.date.noflag$patRIL)
+summary(lm(Learning ~ as.factor(hour), data=total.set.date.noflag))
+summary(lm(Learning ~ as.factor(wday), data=total.set.date.noflag))
+summary(lm(Learning ~ as.factor(month), data=total.set.date.noflag))
+summary(lm(Learning ~ as.factor(year), data=total.set.date.noflag))
+summary(lm(Memory ~ as.factor(hour), data=total.set.date.noflag))
+summary(lm(Memory ~ as.factor(wday), data=total.set.date.noflag))
+summary(lm(Memory ~ as.factor(month), data=total.set.date.noflag))
+summary(lm(Memory ~ as.factor(year), data=total.set.date.noflag))
+
+pptemp <- subset(total.set.date.noflag, patRIL==11003)
+summary(lm(Learning ~ as.factor(hour), data=pptemp))
+summary(lm(Learning ~ as.factor(wday), data=pptemp))
+summary(lm(Learning ~ as.factor(month), data=pptemp))
+summary(lm(Learning ~ as.factor(year), data=pptemp))
+summary(lm(Memory ~ as.factor(hour), data=pptemp))
+summary(lm(Memory ~ as.factor(wday), data=pptemp))
+summary(lm(Memory ~ as.factor(month), data=pptemp))
+summary(lm(Memory ~ as.factor(year), data=pptemp))
+
+tt.w <- table(total.set.date.noflag[,c('patRIL','wday')])
+
+
 
 LL.set <- subset(total.set, flag == 'none' & dflag == 'none')
 cut.s <- which(is.na(LL.set$Learning))

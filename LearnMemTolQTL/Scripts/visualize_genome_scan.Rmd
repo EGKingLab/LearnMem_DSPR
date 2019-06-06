@@ -26,6 +26,8 @@ load(file="../../LearnMemTolQTL/ProcessedData/myGenos.rda")
 Nrils <- nrow(myGenos$phenotype)
 rm(myGenos)
 
+line.ww <- 1
+
 #set value for theresholds 
 fdr <- min(fdr.out$fdr$threshold[fdr.out$fdr$fdr<=0.05])
 fwer <- fdr.out$fwer

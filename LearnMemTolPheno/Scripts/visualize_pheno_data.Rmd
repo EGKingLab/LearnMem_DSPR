@@ -11,6 +11,8 @@ library(ggplot2)
 library(cowplot)
 library(dplyr)
 library(ggrepel)
+library(GGally)
+
 source(file="../../Functions/ggplot_theme.R")
 ```
 
@@ -27,6 +29,8 @@ str(rawdTT)
 #make mean graphs
 load(file="../ProcessedData/L_MDATA.rda")
 load(file="../ProcessedData/T_TDATA.rda")
+load(file="../ProcessedData/ActDATA.rda")
+
 
 #RILs that we used in RNAseq
 RIL_rna <- data.frame("Pool"= rep(c('LH','LL','MH','ML','TH','TL'),each=7), 
@@ -211,14 +215,57 @@ ggsave(ThermTol_indi_points, file="../Plots/ThermTol_indi_plot.pdf", width=10, h
 
 ```
 
+## Counts of RILs
 ```{r}
 
 cts <- rawdLM %>% group_by(patRIL) %>% tally()
 mean(cts$n)
 
-ggplot(cts, aes(x=n)) +
-  geom_histogram()
+pN <- ggplot(cts, aes(x=n)) +
+  geom_histogram() +
+  xlab("Number of Individuals") +
+  ylab("Count") + 
+  my_theme
+ggsave(pN, filename="../Plots/NperRIL.pdf", width=5, height=3)
+
+
+
+```
+
+## Relationships btw variables
+
+```{r}
+
+All_Traits <- merge(L_MDATA, T_TDATA, by='patRIL')
+All_Traits <- merge(All_Traits, ActDATA, by='patRIL')
+
+All_Traits <- All_Traits[,c("Learning_Mean","Memory_Mean","Incapacitation_Mean","Act_Mean")]
+colnames(All_Traits) <- c("Learning", "Memory","Thermaltolerance","Activity")
+
+pp.all <- ggscatmat(All_Traits)
+
+ggsave(pp.all, filename="../Plots/Pheno_allT.pdf", width=6.5, height=6.5)
 
 ```
 
 
+## Learning transformation
+```{r}
+
+h1 <- ggplot(L_MDATA, aes(x=Learning_Mean)) +
+  geom_histogram(bins=30) +
+  ylab("Count") +
+  xlab("Learning")+
+  my_theme
+h1
+h2 <- ggplot(L_MDATA, aes(x=LearnPowerTrans)) +
+  geom_histogram(bins=30) +
+  ylab("Count") +
+  xlab(expression(Learning^3)) +
+  my_theme
+h2
+hall<-plot_grid(h1,h2, labels=c("a.","b."), label_size = 10, nrow=1)
+
+ggsave(hall, filename="../Plots/LearnTransHist.pdf", width=6.5, height=3.5)
+
+```

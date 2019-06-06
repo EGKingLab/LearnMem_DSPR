@@ -20,7 +20,7 @@ rawdLM <- read.table("../ProcessedData/LearnMem_processed.txt",sep="\t", header=
 
 
 str(rawdLM)
-rawdLM[1:5]
+rawdLM[1:5,]
 
 ```
 
@@ -30,7 +30,7 @@ rawdTT <- read.table("../ProcessedData/ThermalTol_processed.txt",sep="\t", heade
 
 
 str(rawdTT)
-rawdTT[1:5]
+rawdTT[1:5,]
 
 
 ```
@@ -46,7 +46,10 @@ L_MDATA <- rawdLM %>%
             Memory_SEM = sd(Memory)/sqrt(length(Memory)),
             N = length(Memory))
 
-
+ActDATA <- rawdLM %>% 
+  group_by(patRIL) %>% 
+  summarise(Act_Mean = mean(Activity_score),
+            Act_SEM = sd(Activity_score)/sqrt(length(Activity_score)))
 
 
 T_TDATA <- rawdTT %>% 
@@ -54,6 +57,19 @@ T_TDATA <- rawdTT %>%
   summarise(Incapacitation_Mean = mean(incapacitation),
             Incapacitation_SEM = sd(incapacitation)/sqrt(length(incapacitation)),
             N = length(incapacitation))
+
+PRE <- rawdLM %>% 
+  group_by(patRIL) %>% 
+  summarise(PreMean = mean(Pre),
+            Pre_SEM = sd(Pre)/sqrt(length(Pre)))
+
+PRE$lower <- PRE$PreMean- 2*PRE$Pre_SEM
+PRE$upper <- PRE$PreMean+ 2*PRE$Pre_SEM
+
+ww <- which(PRE$lower < 0 & PRE$upper > 0)
+
+cor(PRE$PreMean, L_MDATA$Learning_Mean^3)
+
 ```
 
 
@@ -153,7 +169,7 @@ ThermTolDATA_sort[721:730,]
 
 ```{r}
 #Learning Low
-LearnRNAseqLow <- L_MDATA %>% filter(patRIL %in% c("12044", "12285", "12138", "11189", "12022", "12084", "12324"))
+LearnRNAseqLow <- L_MDATA %>% filter(patRIL %in% c("12044", "12285", "12138", "11189", "12022", "12084", "12324"))z
 
 #save(LearnRNAseqLow, file="../ProcessedData/LearnRNAseqLow.rda")
 
@@ -212,6 +228,9 @@ ggplot(L_MDATA, aes(x = LearnPowerTrans)) +
   geom_histogram()
 
 save(L_MDATA, file="../ProcessedData/L_MDATA.rda")
+
+save(ActDATA, file="../ProcessedData/ActDATA.rda")
+
 
 ```
 
